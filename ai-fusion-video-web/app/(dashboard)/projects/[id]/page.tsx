@@ -31,6 +31,7 @@ import {
   type StoryboardEpisode,
 } from "@/lib/api/storyboard";
 import { assetApi, type Asset } from "@/lib/api/asset";
+import { artStyleApi, type ArtStylePreset } from "@/lib/api/art-style";
 import { resolveMediaUrl } from "@/lib/api/client";
 import AssetTypePlaceholder from "@/components/dashboard/asset-type-placeholder";
 import { useProject } from "./project-context";
@@ -102,6 +103,13 @@ export default function ProjectOverviewPage() {
   const [storyboardItemCount, setStoryboardItemCount] = useState(0);
   const [loadingStoryboard, setLoadingStoryboard] = useState(true);
   const [deletingStoryboard, setDeletingStoryboard] = useState(false);
+
+  // 画风预设
+  const [artPresets, setArtPresets] = useState<ArtStylePreset[]>([]);
+
+  useEffect(() => {
+    artStyleApi.getPresets().then(setArtPresets).catch(console.error);
+  }, []);
 
   // 资产状态
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -334,11 +342,13 @@ export default function ProjectOverviewPage() {
             <span className="text-muted-foreground text-xs">画风</span>
             <span className={cn(
               "px-2 py-0.5 rounded-md text-xs font-medium",
-              properties.artStyle
+              project?.artStyle
                 ? "bg-primary/10 text-primary"
                 : "bg-muted/50 text-muted-foreground"
             )}>
-              {properties.artStyle || "未设置"}
+              {project?.artStyle
+                ? (artPresets.find((p) => p.key === project.artStyle)?.name ?? project.artStyle)
+                : "未设置"}
             </span>
           </div>
 

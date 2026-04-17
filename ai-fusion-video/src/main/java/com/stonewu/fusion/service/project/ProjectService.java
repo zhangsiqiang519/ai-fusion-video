@@ -4,8 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stonewu.fusion.common.PageResult;
 import com.stonewu.fusion.common.BusinessException;
+import com.stonewu.fusion.entity.asset.Asset;
+import com.stonewu.fusion.entity.asset.AssetItem;
 import com.stonewu.fusion.entity.project.Project;
 import com.stonewu.fusion.entity.project.ProjectMember;
+import com.stonewu.fusion.mapper.asset.AssetItemMapper;
+import com.stonewu.fusion.mapper.asset.AssetMapper;
 import com.stonewu.fusion.mapper.project.ProjectMapper;
 import com.stonewu.fusion.mapper.project.ProjectMemberMapper;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +29,8 @@ public class ProjectService {
 
     private final ProjectMapper projectMapper;
     private final ProjectMemberMapper memberMapper;
+    private final AssetMapper assetMapper;
+    private final AssetItemMapper assetItemMapper;
 
     @Cacheable(value = "project", key = "#id")
     public Project getById(Long id) {
@@ -63,6 +69,19 @@ public class ProjectService {
     @CacheEvict(value = "project", allEntries = true)
     @Transactional
     public void delete(Long id) {
+        // 级联删除项目下的所有资产及其子项
+        List<Asset> assets = assetMapper.selectList(
+                new LambdaQueryWrapper<Asset>().eq(Asset::getProjectId, id));
+        for (Asset asset : assets) {
+            assetItemMapper.delete(
+                    new LambdaQueryWrapper<AssetItem>().eq(AssetItem::getAssetId, asset.getId()));
+        }
+        if (!assets.isEmpty()) {
+            assetMapper.delete(new LambdaQueryWrapper<Asset>().eq(Asset::getProjectId, id));
+        }
+        // 删除项目成员
+        memberMapper.delete(new LambdaQueryWrapper<ProjectMember>().eq(ProjectMember::getProjectId, id));
+        // 删除项目本身
         projectMapper.deleteById(id);
     }
 

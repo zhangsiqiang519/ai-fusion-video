@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   Settings,
   Palette,
@@ -54,6 +55,7 @@ const aspectRatios = [
 type ArtStyleTab = "preset" | "custom";
 
 export default function ProjectSettingsPage() {
+  const router = useRouter();
   const { project, refresh } = useProject();
 
   // properties 中的简单配置
@@ -66,6 +68,7 @@ export default function ProjectSettingsPage() {
   const [artStyleImagePrompt, setArtStyleImagePrompt] = useState<string>("");
   const [artStyleImageUrl, setArtStyleImageUrl] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // 画风相关状态
   const [presets, setPresets] = useState<ArtStylePreset[]>([]);
@@ -207,6 +210,20 @@ export default function ProjectSettingsPage() {
   // 自定义画风的参考图是否可用
   const isCustomRefAvailable = artStyleImageUrl?.startsWith("http://") || artStyleImageUrl?.startsWith("https://");
 
+
+  const handleDeleteProject = async () => {
+    if (!project) return;
+    if (!confirm("确定要删除该项目吗？此操作将永久移除所有剧本、分镜、资产等数据，不可恢复。")) return;
+    setDeleting(true);
+    try {
+      await projectApi.delete(project.id);
+      router.push("/projects");
+    } catch (err) {
+      console.error("删除项目失败:", err);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!project || !hasChanges) return;
@@ -590,14 +607,20 @@ export default function ProjectSettingsPage() {
           删除项目将永久移除所有剧本、分镜、资产等数据，此操作不可恢复。
         </p>
         <button
+          onClick={handleDeleteProject}
+          disabled={deleting}
           className={cn(
             "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium",
             "border border-destructive/30 text-destructive",
-            "hover:bg-destructive/10 transition-colors"
+            "hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           )}
         >
-          <Trash2 className="h-4 w-4" />
-          删除项目
+          {deleting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+          {deleting ? "删除中…" : "删除项目"}
         </button>
       </motion.div>
     </motion.div>
