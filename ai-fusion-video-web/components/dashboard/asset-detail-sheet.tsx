@@ -145,21 +145,25 @@ function CoverSelectorDialog({
   onSelect: (url: string) => void; 
 }) {
   const [assets, setAssets] = useState<AssetWithItems[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadedProjectId, setLoadedProjectId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const loading = open && projectId > 0 && loadedProjectId !== projectId;
 
   useEffect(() => {
     if (open && projectId) {
-      setLoading(true);
       assetApi.listWithItems(projectId)
         .then(res => {
           setAssets(res);
+          setLoadedProjectId(projectId);
           // 默认展开所有资产
           const allIds = new Set(res.map(a => a.id));
           setExpandedIds(allIds);
         })
-        .catch(console.error)
-        .finally(() => setLoading(false));
+        .catch(err => {
+          console.error(err);
+          setAssets([]);
+          setLoadedProjectId(projectId);
+        });
     }
   }, [open, projectId]);
 

@@ -13,7 +13,11 @@ export interface AiModel {
   sort: number;
   status: number;
   config: string | null;
+  maxConcurrency: number | null;
   defaultModel: boolean;
+  supportVision: boolean;
+  supportReasoning: boolean;
+  contextWindow: number | null;
   apiConfigId: number | null;
   createTime: string;
   updateTime: string;
@@ -28,7 +32,11 @@ export interface AiModelCreateReq {
   description?: string;
   sort?: number;
   config?: string;
+  maxConcurrency?: number;
   defaultModel?: boolean;
+  supportVision?: boolean;
+  supportReasoning?: boolean;
+  contextWindow?: number;
   apiConfigId?: number;
 }
 
@@ -43,7 +51,11 @@ export interface AiModelUpdateReq {
   sort?: number;
   status?: number;
   config?: string;
+  maxConcurrency?: number;
   defaultModel?: boolean;
+  supportVision?: boolean;
+  supportReasoning?: boolean;
+  contextWindow?: number;
   apiConfigId?: number;
 }
 
@@ -55,6 +67,12 @@ export interface ModelPreset {
   modelType: number;
   description: string;
   config: Record<string, unknown>;
+}
+
+/** 远程 API 返回的可用模型 */
+export interface RemoteModel {
+  id: string;
+  ownedBy: string;
 }
 
 /** 分页结果 */
@@ -81,6 +99,7 @@ export interface ApiConfig {
   name: string;
   platform: string | null;
   apiUrl: string | null;
+  autoAppendV1Path: boolean;
   apiKey: string | null;
   appId: string | null;
   appSecret: string | null;
@@ -97,6 +116,7 @@ export interface ApiConfigSaveReq {
   name: string;
   platform?: string;
   apiUrl?: string;
+  autoAppendV1Path?: boolean;
   apiKey?: string;
   appId?: string;
   appSecret?: string;
@@ -234,4 +254,8 @@ export const apiConfigApi = {
   /** 删除 API 配置 */
   delete: (id: number) =>
     http.delete<never, boolean>(`/ai/api-config/delete?id=${id}`),
+
+  /** 获取远程可用模型列表 */
+  remoteModels: (id: number) =>
+    http.get<never, RemoteModel[]>(`/ai/api-config/remote-models?id=${id}`),
 };

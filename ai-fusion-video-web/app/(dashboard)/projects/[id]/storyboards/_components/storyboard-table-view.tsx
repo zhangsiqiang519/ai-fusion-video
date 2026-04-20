@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Film, GripVertical, Plus, Trash2, ImageIcon, Video, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/api/client";
@@ -8,7 +8,30 @@ import type { StoryboardItem } from "@/lib/api/storyboard";
 import { EditableCell } from "./editable-cell";
 
 /** 列定义 */
-const COLUMNS = [
+type StoryboardTableField =
+  | "shotNumber"
+  | "imageUrl"
+  | "generatedVideoUrl"
+  | "shotType"
+  | "duration"
+  | "cameraAngle"
+  | "cameraMovement"
+  | "content"
+  | "dialogue"
+  | "sound"
+  | "remark";
+
+interface ColumnDef {
+  label: string;
+  field: StoryboardTableField;
+  initW: number;
+  minW: number;
+  isImage?: boolean;
+  isVideo?: boolean;
+  multiline?: boolean;
+}
+
+const COLUMNS: ColumnDef[] = [
   { label: "镜号", field: "shotNumber", initW: 56, minW: 40 },
   { label: "画面", field: "imageUrl", initW: 80, minW: 60, isImage: true },
   { label: "视频", field: "generatedVideoUrl", initW: 80, minW: 60, isVideo: true },
@@ -104,7 +127,10 @@ export function StoryboardTableView({
   const [resizingCol, setResizingCol] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const colWidthsRef = useRef(colWidths);
-  colWidthsRef.current = colWidths;
+
+  useEffect(() => {
+    colWidthsRef.current = colWidths;
+  }, [colWidths]);
 
   /** 构建 grid-template-columns 字符串 */
   const buildGridTemplate = useCallback(
@@ -293,7 +319,7 @@ export function StoryboardTableView({
                           <ImageIcon className="h-3.5 w-3.5 text-muted-foreground/30" />
                         )}
                       </div>
-                    ) : (col as any).isVideo ? (
+                    ) : col.isVideo ? (
                       <div className="flex items-center justify-center h-11 w-16 rounded-md bg-muted/20 border border-border/10 overflow-hidden shrink-0 relative group/video">
                         {(item.generatedVideoUrl || item.videoUrl) ? (
                           <>

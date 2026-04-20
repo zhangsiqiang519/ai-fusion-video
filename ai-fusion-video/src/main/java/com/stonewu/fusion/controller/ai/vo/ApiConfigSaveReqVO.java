@@ -12,6 +12,7 @@ public class ApiConfigSaveReqVO {
     private String name;
     private String platform;
     private String apiUrl;
+    private Boolean autoAppendV1Path;
     private String apiKey;
     private String appId;
     private String appSecret;

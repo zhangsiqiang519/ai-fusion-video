@@ -20,12 +20,16 @@ public class ApiConfigService {
 
     @Transactional
     public Long createApiConfig(ApiConfig apiConfig) {
+        if (apiConfig.getAutoAppendV1Path() == null) {
+            apiConfig.setAutoAppendV1Path(true);
+        }
         apiConfigMapper.insert(apiConfig);
         return apiConfig.getId();
     }
 
     @Transactional
     public void updateApiConfig(Long id, String name, String platform, String apiUrl,
+                                 Boolean autoAppendV1Path,
                                  String apiKey, String appId, String appSecret,
                                  Long modelId, Integer status, String remark) {
         ApiConfig config = apiConfigMapper.selectById(id);
@@ -33,6 +37,7 @@ public class ApiConfigService {
         if (name != null) config.setName(name);
         if (platform != null) config.setPlatform(platform);
         if (apiUrl != null) config.setApiUrl(apiUrl);
+        if (autoAppendV1Path != null) config.setAutoAppendV1Path(autoAppendV1Path);
         if (apiKey != null) config.setApiKey(apiKey);
         if (appId != null) config.setAppId(appId);
         if (appSecret != null) config.setAppSecret(appSecret);

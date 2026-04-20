@@ -59,7 +59,7 @@ export function getPlatformFields(platform: string): PlatformField[] {
     case "openai_compatible":
     case "volcengine":
       return [
-        { key: "apiUrl", label: "API 地址", placeholder: "https://api.openai.com/v1", type: "text" },
+        { key: "apiUrl", label: "API 地址", placeholder: "https://api.openai.com（只填根域名）", type: "text" },
         { key: "apiKey", label: "API 密钥", placeholder: "sk-...", type: "password", required: true },
       ];
     case "vertex_ai":
@@ -73,7 +73,7 @@ export function getPlatformFields(platform: string): PlatformField[] {
       ];
     case "anthropic":
       return [
-        { key: "apiUrl", label: "API 地址", placeholder: "https://api.anthropic.com（可选）", type: "text" },
+        { key: "apiUrl", label: "API 地址", placeholder: "https://api.anthropic.com（只填根域名）", type: "text" },
         { key: "apiKey", label: "API 密钥", placeholder: "sk-ant-...", type: "password", required: true },
       ];
     case "ollama":
@@ -91,8 +91,8 @@ export function getPlatformFields(platform: string): PlatformField[] {
 // 平台默认 URL 提示
 export function getPlatformDefaultUrl(platform: string): string {
   switch (platform) {
-    case "volcengine": return "https://ark.cn-beijing.volces.com/api/v3";
-    case "openai_compatible": return "https://api.openai.com/v1";
+    case "volcengine": return "https://ark.cn-beijing.volces.com";
+    case "openai_compatible": return "https://api.openai.com";
     case "ollama": return "http://localhost:11434";
     default: return "";
   }

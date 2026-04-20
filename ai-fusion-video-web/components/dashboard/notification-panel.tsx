@@ -28,6 +28,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { cn } from "@/lib/utils";
+import { StreamMarkdown } from "@/components/dashboard/stream-markdown";
 import { usePipelineStore } from "@/lib/store/pipeline-store";
 import type { PipelineTask, TimelineItem, SubTimelineItem } from "@/lib/store/pipeline-store";
 import {
@@ -110,15 +111,15 @@ function formatElapsed(durationMs: number): string {
 
 /** 实时计时 hook：running 时每秒 tick，结束后停止 */
 function useElapsed(task: PipelineTask): string {
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => task.finishedAt ?? Date.now());
 
   useEffect(() => {
     if (task.status !== "running") return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [task.status]);
 
-  const endTime = task.finishedAt ?? Date.now();
+  const endTime = task.finishedAt ?? now;
   return formatElapsed(endTime - task.createdAt);
 }
 
@@ -474,17 +475,24 @@ function SubAgentCard({
             <div ref={innerScrollRef} className="border-t border-purple-500/10 px-4 py-3 space-y-2 max-h-[400px] overflow-y-auto">
               {children.map((child, cidx) => {
                 if (child.type === "reasoning") {
+                  const childIsStreaming =
+                    isRunning && cidx === children.length - 1;
+                  const childTitle = child.durationMs
+                    ? `思考 (${(child.durationMs / 1000).toFixed(1)}s)`
+                    : childIsStreaming
+                      ? "思考中"
+                      : "思考";
                   return (
                     <Think
                       key={`sub-reasoning-${cidx}`}
                       style={{ maxHeight: 120, overflowY: "auto" }}
-                      title={
-                        child.durationMs
-                          ? `思考 (${(child.durationMs / 1000).toFixed(1)}s)`
-                          : undefined
-                      }
+                      title={childTitle}
                     >
-                      {child.text}
+                      <StreamMarkdown
+                        content={child.text}
+                        compact
+                        streaming={childIsStreaming}
+                      />
                     </Think>
                   );
                 }
@@ -548,20 +556,47 @@ interface MessageTimelineProps {
 }
 
 function MessageTimeline({ reasoningText, reasoningDurationMs, timeline, streaming, error }: MessageTimelineProps) {
+  const hasTimelineReasoning = timeline.some((item) => item.type === "reasoning");
+  const reasoningTitle = reasoningDurationMs
+    ? `思考 (${(reasoningDurationMs / 1000).toFixed(1)}s)`
+    : streaming
+      ? "思考中"
+      : "思考";
+
   return (
     <>
-      {/* 思考过程 */}
-      {reasoningText && (
+      {/* 历史兼容：旧数据里 reasoning 仍是单独字段时，作为头部兜底展示 */}
+      {!hasTimelineReasoning && reasoningText && (
         <Think
           style={{ maxHeight: 192, overflowY: "auto" }}
-          title={reasoningDurationMs ? `思考 (${(reasoningDurationMs / 1000).toFixed(1)}s)` : undefined}
+          title={reasoningTitle}
         >
-          {reasoningText}
+          <StreamMarkdown content={reasoningText} streaming={!!streaming} />
         </Think>
       )}
 
       {/* 时间线条目 */}
       {timeline.map((item, idx) => {
+        if (item.type === "reasoning") {
+          const itemTitle = item.durationMs
+            ? `思考 (${(item.durationMs / 1000).toFixed(1)}s)`
+            : streaming && idx === timeline.length - 1
+              ? "思考中"
+              : "思考";
+          return (
+            <Think
+              key={`reasoning-${idx}`}
+              style={{ maxHeight: 192, overflowY: "auto" }}
+              title={itemTitle}
+            >
+              <StreamMarkdown
+                content={item.text}
+                streaming={streaming && idx === timeline.length - 1}
+              />
+            </Think>
+          );
+        }
+
         if (item.type === "tool") {
           // 子 Agent 工具 → 渲染嵌套卡片
           if (isSubAgentTool(item.name) || (item.children && item.children.length > 0)) {
@@ -613,24 +648,24 @@ function MessageTimeline({ reasoningText, reasoningDurationMs, timeline, streami
 // ========== 实时 Pipeline 详情面板（右侧） ==========
 
 function PipelineDetailPanel({ task }: { task: PipelineTask }) {
-  const [isIdle, setIsIdle] = useState(false);
+  const [idleTimelineLength, setIdleTimelineLength] = useState<number | null>(null);
+  const timelineLength = task.state.timeline.length;
+  const isIdle = task.status === "running" && idleTimelineLength === timelineLength;
 
   // 外层智能自动滚动（用户上滚打断，滚回底部恢复）
   const timelineRef = useSmartScroll(
-    [task.state.timeline, task.state.reasoningText, isIdle],
+    [task.state.timeline, isIdle],
     task.status === "running"
   );
 
   // 空闲检测：超过 2 秒无新 timeline 更新时显示提示
   useEffect(() => {
-    if (task.status !== "running") {
-      setIsIdle(false);
-      return;
-    }
-    setIsIdle(false);
-    const timer = setTimeout(() => setIsIdle(true), 2000);
+    if (task.status !== "running") return;
+    const timer = setTimeout(() => {
+      setIdleTimelineLength(timelineLength);
+    }, 2000);
     return () => clearTimeout(timer);
-  }, [task.state.timeline, task.state.reasoningText, task.status]);
+  }, [timelineLength, task.status]);
 
   const statusText = {
     running: "运行中",
@@ -1596,10 +1631,112 @@ function GenericResult({ data }: { data: unknown }) {
 
 // ========== 将历史消息转换为统一时间线格式 ==========
 
+function pushReasoningToTimeline(
+  timeline: TimelineItem[],
+  text: string,
+  durationMs?: number
+) {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "reasoning") {
+    last.text += text;
+    if (durationMs !== undefined) {
+      last.durationMs = durationMs;
+    }
+    return;
+  }
+  timeline.push({
+    type: "reasoning",
+    text,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  });
+}
+
+function pushContentToTimeline(timeline: TimelineItem[], text: string) {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "content") {
+    last.text += text;
+    return;
+  }
+  timeline.push({ type: "content", text });
+}
+
+function updateLastTimelineReasoningDuration(
+  timeline: TimelineItem[],
+  durationMs: number
+) {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const item = timeline[index];
+    if (item.type === "reasoning") {
+      item.durationMs = durationMs;
+      return;
+    }
+  }
+}
+
+function pushReasoningToSubTimeline(
+  children: SubTimelineItem[],
+  text: string,
+  durationMs?: number
+) {
+  const last = children[children.length - 1];
+  if (last && last.type === "reasoning") {
+    last.text += text;
+    if (durationMs !== undefined) {
+      last.durationMs = durationMs;
+    }
+    return;
+  }
+  children.push({
+    type: "reasoning",
+    text,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  });
+}
+
+function pushContentToSubTimeline(children: SubTimelineItem[], text: string) {
+  const last = children[children.length - 1];
+  if (last && last.type === "content") {
+    last.text += text;
+    return;
+  }
+  children.push({ type: "content", text });
+}
+
+function updateLastSubTimelineReasoningDuration(
+  children: SubTimelineItem[],
+  durationMs: number
+) {
+  for (let index = children.length - 1; index >= 0; index--) {
+    const item = children[index];
+    if (item.type === "reasoning") {
+      item.durationMs = durationMs;
+      return;
+    }
+  }
+}
+
 function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["timeline"] {
   const timeline: MessageTimelineProps["timeline"] = [];
   // toolCallId → 已建 timeline 中对应 tool item 的索引，用于 TOOL_FINISHED 更新和子 Agent 归属
   const toolIndexMap = new Map<string, number>();
+
+  const appendToParentChildren = (
+    parentToolCallId: string,
+    updater: (children: SubTimelineItem[]) => void
+  ) => {
+    const parentIdx = toolIndexMap.get(parentToolCallId);
+    if (parentIdx === undefined) return false;
+
+    const parentItem = timeline[parentIdx];
+    if (parentItem.type !== "tool") return false;
+
+    if (!parentItem.children) {
+      parentItem.children = [];
+    }
+
+    updater(parentItem.children);
+    return true;
+  };
 
   for (const msg of messages) {
     if (msg.role === "tool") {
@@ -1607,43 +1744,36 @@ function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["tim
 
       if (msg.parentToolCallId) {
         // 子 Agent 内部的工具调用 → 归入父工具的 children
-        const parentIdx = toolIndexMap.get(msg.parentToolCallId);
-        if (parentIdx !== undefined) {
-          const parentItem = timeline[parentIdx];
-          if (parentItem.type === "tool") {
-            if (!parentItem.children) parentItem.children = [];
-
-            if (msg.toolStatus === "running") {
-              // 子工具调用发起
-              parentItem.children.push({
-                type: "tool",
-                id: toolCallId,
-                name: msg.toolName || "tool",
-                arguments: msg.content || "",
-                status: "calling",
-              });
-            } else {
-              // 子工具调用结果：查找已有的 calling 记录并更新
-              const existingChild = parentItem.children.find(
-                (c) => c.type === "tool" && c.id === toolCallId
-              );
-              if (existingChild && existingChild.type === "tool") {
-                existingChild.status = msg.toolStatus === "error" ? "error" : "done";
-                existingChild.result = msg.content;
-              } else {
-                // 没有对应的 calling 记录，直接添加完成记录
-                parentItem.children.push({
-                  type: "tool",
-                  id: toolCallId,
-                  name: msg.toolName || "tool",
-                  arguments: "",
-                  status: msg.toolStatus === "error" ? "error" : "done",
-                  result: msg.content,
-                });
-              }
-            }
+        appendToParentChildren(msg.parentToolCallId, (children) => {
+          if (msg.toolStatus === "running") {
+            children.push({
+              type: "tool",
+              id: toolCallId,
+              name: msg.toolName || "tool",
+              arguments: msg.content || "",
+              status: "calling",
+            });
+            return;
           }
-        }
+
+          const existingChild = children.find(
+            (child) => child.type === "tool" && child.id === toolCallId
+          );
+          if (existingChild && existingChild.type === "tool") {
+            existingChild.status = msg.toolStatus === "error" ? "error" : "done";
+            existingChild.result = msg.content;
+            return;
+          }
+
+          children.push({
+            type: "tool",
+            id: toolCallId,
+            name: msg.toolName || "tool",
+            arguments: "",
+            status: msg.toolStatus === "error" ? "error" : "done",
+            result: msg.content,
+          });
+        });
       } else {
         // 主 Agent 的工具调用
         if (msg.toolStatus === "running") {
@@ -1682,9 +1812,48 @@ function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["tim
         }
       }
     } else {
-      // assistant / user — content 文本
-      if (msg.content) {
-        timeline.push({ type: "content", text: msg.content });
+      if (msg.parentToolCallId) {
+        appendToParentChildren(msg.parentToolCallId, (children) => {
+          if (msg.reasoningContent) {
+            pushReasoningToSubTimeline(
+              children,
+              msg.reasoningContent,
+              msg.reasoningDurationMs
+            );
+          } else if (msg.reasoningDurationMs !== undefined) {
+            updateLastSubTimelineReasoningDuration(
+              children,
+              msg.reasoningDurationMs
+            );
+          }
+
+          if (msg.content) {
+            if (msg.reasoningDurationMs !== undefined) {
+              updateLastSubTimelineReasoningDuration(
+                children,
+                msg.reasoningDurationMs
+              );
+            }
+            pushContentToSubTimeline(children, msg.content);
+          }
+        });
+      } else {
+        if (msg.reasoningContent) {
+          pushReasoningToTimeline(
+            timeline,
+            msg.reasoningContent,
+            msg.reasoningDurationMs
+          );
+        } else if (msg.reasoningDurationMs !== undefined) {
+          updateLastTimelineReasoningDuration(timeline, msg.reasoningDurationMs);
+        }
+
+        if (msg.content) {
+          if (msg.reasoningDurationMs !== undefined) {
+            updateLastTimelineReasoningDuration(timeline, msg.reasoningDurationMs);
+          }
+          pushContentToTimeline(timeline, msg.content);
+        }
       }
     }
   }
@@ -1698,19 +1867,35 @@ function HistoryDetailPanel({
 }: {
   conversation: AgentConversation;
 }) {
-  const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [messageState, setMessageState] = useState<{
+    conversationId: string;
+    messages: AgentMessage[];
+  } | null>(null);
+  const loading = messageState?.conversationId !== conversation.conversationId;
+  const messages =
+    messageState?.conversationId === conversation.conversationId
+      ? messageState.messages
+      : [];
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listMessages(conversation.conversationId)
       .then((msgs) => {
-        if (!cancelled) setMessages(msgs);
+        if (!cancelled) {
+          setMessageState({
+            conversationId: conversation.conversationId,
+            messages: msgs,
+          });
+        }
       })
-      .catch(console.error)
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setMessageState({
+            conversationId: conversation.conversationId,
+            messages: [],
+          });
+        }
       });
     return () => {
       cancelled = true;
@@ -1808,10 +1993,16 @@ function PipelineTaskCard({ task }: { task: PipelineTask }) {
     const timeline = task.state.timeline;
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
+      if (item.type === "reasoning") {
+        return "AI 正在思考…";
+      }
       if (item.type === "tool") {
         return item.status === "calling"
           ? `正在${getToolDisplayName(item.name)}…`
           : `${getToolDisplayName(item.name)} ✓`;
+      }
+      if (item.type === "content") {
+        return task.status === "running" ? "AI 正在输出…" : "已生成回复";
       }
     }
     if (task.state.reasoningText) return "AI 正在思考…";

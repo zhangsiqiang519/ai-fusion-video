@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronRight } from "lucide-react";
@@ -82,12 +82,11 @@ export const UserAvatarDropdown = React.forwardRef<
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 });
-  const [mounted, setMounted] = useState(false);
-
-  // 客户端挂载检测（SSR 安全）
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const isClient = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   // 用户名首字母（头像回退）
   const avatarInitial = (user.name || "U").charAt(0).toUpperCase();
@@ -146,7 +145,7 @@ export const UserAvatarDropdown = React.forwardRef<
       </button>
 
       {/* 下拉菜单 — Portal 渲染到 body */}
-      {mounted &&
+      {isClient &&
         createPortal(
           <AnimatePresence>
             {isOpen && (

@@ -232,24 +232,24 @@ public class ScriptService {
     @CacheEvict(value = { "scene", "episode" }, allEntries = true)
     @Transactional
     public void batchSaveSceneItems(Long episodeId, Integer episodeVersion, List<ScriptSceneItem> sceneItems,
-            boolean appendMode) {
+            boolean overwriteMode) {
         ScriptEpisode episode = getEpisodeById(episodeId);
 
-        // 乐观锁校验（仅非追加模式时校验，追加模式跳过以避免多次调用冲突）
-        if (!appendMode && episodeVersion != null && !episodeVersion.equals(episode.getVersion())) {
+        // 乐观锁校验仅在覆盖模式下执行，避免多次追加调用之间发生版本冲突。
+        if (overwriteMode && episodeVersion != null && !episodeVersion.equals(episode.getVersion())) {
             throw new BusinessException(String.format(
                     "版本冲突：期望版本 %d，实际版本 %d。请重新获取最新版本后再试。",
                     episodeVersion, episode.getVersion()));
         }
 
         int startIndex = 0;
-        if (appendMode) {
+        if (!overwriteMode) {
             // 追加模式：查询已有场次数量，从末尾继续编号
             Long existingCount = sceneItemMapper.selectCount(
                     new LambdaQueryWrapper<ScriptSceneItem>().eq(ScriptSceneItem::getEpisodeId, episodeId));
             startIndex = existingCount.intValue();
         } else {
-            // 替换模式：删除旧场次
+            // 覆盖模式：删除旧场次
             sceneItemMapper
                     .delete(new LambdaQueryWrapper<ScriptSceneItem>().eq(ScriptSceneItem::getEpisodeId, episodeId));
         }
@@ -266,7 +266,7 @@ public class ScriptService {
         }
 
         // 更新集的场次计数
-        if (appendMode) {
+    if (!overwriteMode) {
             // 追加模式：重新查询实际场次总数
             Long totalCount = sceneItemMapper.selectCount(
                     new LambdaQueryWrapper<ScriptSceneItem>().eq(ScriptSceneItem::getEpisodeId, episodeId));

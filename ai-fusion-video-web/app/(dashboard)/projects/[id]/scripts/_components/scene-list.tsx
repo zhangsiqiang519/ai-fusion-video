@@ -248,8 +248,8 @@ export function SceneList({
             const { scriptApi } = await import("@/lib/api/script");
             const updated = await scriptApi.updateEpisode({ id: activeEpisode.id, title: newTitle, version: activeEpisode.version });
             onEpisodeUpdated?.(updated);
-          } catch (err: any) {
-            toast.error(err?.message || "更新分集标题失败");
+          } catch (err: unknown) {
+            toast.error(err instanceof Error ? err.message : "更新分集标题失败");
           }
         }}
       />
@@ -262,8 +262,8 @@ export function SceneList({
             const { scriptApi } = await import("@/lib/api/script");
             const updated = await scriptApi.updateEpisode({ id: activeEpisode.id, synopsis: newSynopsis, version: activeEpisode.version });
             onEpisodeUpdated?.(updated);
-          } catch (err: any) {
-            toast.error(err?.message || "更新分集概览失败");
+          } catch (err: unknown) {
+            toast.error(err instanceof Error ? err.message : "更新分集概览失败");
           }
         }}
       />

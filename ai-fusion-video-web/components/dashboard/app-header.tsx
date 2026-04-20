@@ -75,10 +75,11 @@ export function AppHeader() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const tryReconnect = usePipelineStore((s) => s.tryReconnect);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileMenuRoute, setMobileMenuRoute] = useState<string | null>(null);
   const [displayMode, setDisplayMode] = useState<MenuDisplayMode>("full");
   const headerRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuOpen = displayMode === "mobile" && mobileMenuRoute === pathname;
 
   // Pipeline 通知
   const { tasks, notificationOpen, setNotificationOpen, panelExpanded, setPanelExpanded } = usePipelineStore();
@@ -91,22 +92,10 @@ export function AppHeader() {
       pathname.startsWith(route)
     )?.[1] || "仪表盘";
 
-  // 路由变化时关闭移动端菜单
-  useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [pathname]);
-
   // 页面加载时尝试重连 running pipelines
   useEffect(() => {
     tryReconnect();
   }, [tryReconnect]);
-
-  // 非移动端模式时自动关闭下拉菜单
-  useEffect(() => {
-    if (displayMode !== "mobile") {
-      setMobileMenuOpen(false);
-    }
-  }, [displayMode]);
 
   // 点击外部区域关闭移动端菜单
   useEffect(() => {
@@ -114,7 +103,7 @@ export function AppHeader() {
 
     const handleClickOutside = (e: MouseEvent) => {
       if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
-        setMobileMenuOpen(false);
+        setMobileMenuRoute(null);
       }
     };
 
@@ -127,7 +116,7 @@ export function AppHeader() {
     const item = menuItems.find((m) => m.label === label);
     if (item) {
       router.push(item.href);
-      setMobileMenuOpen(false);
+      setMobileMenuRoute(null);
     }
   };
 
@@ -142,6 +131,9 @@ export function AppHeader() {
   // 稳定引用的模式变化回调
   const handleDisplayModeChange = useCallback((mode: MenuDisplayMode) => {
     setDisplayMode(mode);
+    if (mode !== "mobile") {
+      setMobileMenuRoute(null);
+    }
   }, []);
 
   // 用户头像下拉菜单项
@@ -183,7 +175,7 @@ export function AppHeader() {
         }
         mobileControls={
           <button
-            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            onClick={() => setMobileMenuRoute(mobileMenuOpen ? null : pathname)}
             className={cn(
               "p-2 rounded-xl transition-all duration-200",
               "text-muted-foreground hover:text-foreground",

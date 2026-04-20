@@ -34,6 +34,47 @@ export const PIPELINE_AGENT_TYPES = [
   "storyboard_video_executor",
 ] as const;
 
+function parseSseEventBlock(
+  eventBlock: string,
+  callbacks: StreamCallbacks
+) {
+  const dataLines: string[] = [];
+
+  for (const rawLine of eventBlock.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line || line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  const jsonStr = dataLines.join("\n").trim();
+  if (!jsonStr) {
+    return;
+  }
+
+  try {
+    const event: AiChatStreamEvent = JSON.parse(jsonStr);
+    callbacks.onEvent(event);
+  } catch {
+    console.warn("SSE 解析失败:", jsonStr);
+  }
+}
+
+function consumeSseBuffer(buffer: string, callbacks: StreamCallbacks) {
+  const normalizedBuffer = buffer.replace(/\r\n/g, "\n");
+  const eventBlocks = normalizedBuffer.split("\n\n");
+  const remaining = eventBlocks.pop() || "";
+
+  for (const eventBlock of eventBlocks) {
+    parseSseEventBlock(eventBlock, callbacks);
+  }
+
+  return remaining;
+}
+
 // ========== SSE 流式 API ==========
 
 /**
@@ -75,23 +116,11 @@ export function pipelineStream(
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
+        buffer = consumeSseBuffer(buffer, callbacks);
+      }
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith("data:")) {
-            const jsonStr = trimmed.slice(5).trim();
-            if (!jsonStr) continue;
-            try {
-              const event: AiChatStreamEvent = JSON.parse(jsonStr);
-              callbacks.onEvent(event);
-            } catch {
-              console.warn("SSE 解析失败:", jsonStr);
-            }
-          }
-        }
+      if (buffer.trim()) {
+        parseSseEventBlock(buffer, callbacks);
       }
 
       callbacks.onComplete?.();
@@ -142,23 +171,11 @@ export function reconnectPipelineStream(
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
+        buffer = consumeSseBuffer(buffer, callbacks);
+      }
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith("data:")) {
-            const jsonStr = trimmed.slice(5).trim();
-            if (!jsonStr) continue;
-            try {
-              const event: AiChatStreamEvent = JSON.parse(jsonStr);
-              callbacks.onEvent(event);
-            } catch {
-              console.warn("SSE 解析失败:", jsonStr);
-            }
-          }
-        }
+      if (buffer.trim()) {
+        parseSseEventBlock(buffer, callbacks);
       }
 
       callbacks.onComplete?.();

@@ -41,9 +41,9 @@
 
 - 每次调用 save_scene_items 时，scenes 数组最多传入 2 个场次
 - 如果一集有超过 2 个场次，必须分多次调用：
-  - 第一次调用：传入前 1-2 个场次，appendMode 不传或设为 false
-  - 第二次及之后：传入后续 1-2 个场次，appendMode 必须设为 true
-- 示例：5 个场次 → 3 次调用（2+2+1），第 2、3 次 appendMode=true
+  - 第一次调用：传入前 1-2 个场次，overwriteMode 必须设为 true
+  - 第二次及之后：传入后续 1-2 个场次，overwriteMode 不传或设为 false
+- 示例：5 个场次 → 3 次调用（2+2+1），第 1 次 overwriteMode=true，第 2、3 次 overwriteMode=false
 
 ## JSON 格式严格性规则（最高优先级！违反会导致数据丢失）
 

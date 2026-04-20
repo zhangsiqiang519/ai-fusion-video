@@ -21,13 +21,13 @@ import {
   PLATFORM_OPTIONS,
   PLATFORM_LABELS,
   MODEL_TYPE_OPTIONS,
-  MODEL_TYPE_LABELS,
   type AiModel,
   type ApiConfig,
   type AiModelCreateReq,
   type AiModelUpdateReq,
   type ApiConfigSaveReq,
   type ModelPreset,
+  type RemoteModel,
 } from "@/lib/api/ai-model";
 import {
   Dialog,
@@ -49,7 +49,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Check } from "lucide-react";
+import { Sparkles, Check, CloudDownload, Search } from "lucide-react";
 import {
   containerVariants,
   itemVariants,
@@ -83,6 +83,7 @@ function ApiConfigDialog({ open, onOpenChange, editingConfig, onSaved }: ApiConf
           name: editingConfig.name,
           platform: editingConfig.platform || "",
           apiUrl: editingConfig.apiUrl || "",
+          autoAppendV1Path: editingConfig.autoAppendV1Path ?? true,
           apiKey: editingConfig.apiKey || "",
           appId: editingConfig.appId || "",
           appSecret: editingConfig.appSecret || "",
@@ -90,7 +91,7 @@ function ApiConfigDialog({ open, onOpenChange, editingConfig, onSaved }: ApiConf
           remark: editingConfig.remark || "",
         });
       } else {
-        setForm({ name: "", platform: "openai_compatible", apiUrl: "", apiKey: "", appId: "", appSecret: "", status: 1 });
+        setForm({ name: "", platform: "openai_compatible", apiUrl: "", autoAppendV1Path: true, apiKey: "", appId: "", appSecret: "", status: 1 });
       }
       setShowSecrets({});
     }
@@ -135,7 +136,7 @@ function ApiConfigDialog({ open, onOpenChange, editingConfig, onSaved }: ApiConf
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">配置名称</Label>
             <Input
-              placeholder="例如：DeepSeek / GPT-4o / Gemini"
+              placeholder="例如：DeepSeek / Gemini"
               value={form.name}
               onChange={e => updateField("name", e.target.value)}
               className="text-sm"
@@ -153,6 +154,9 @@ function ApiConfigDialog({ open, onOpenChange, editingConfig, onSaved }: ApiConf
                 const defaultUrl = getPlatformDefaultUrl(v as string);
                 if (defaultUrl) {
                   updateField("apiUrl", defaultUrl);
+                }
+                if (v === "openai_compatible") {
+                  updateField("autoAppendV1Path", true);
                 }
               }}
               items={PLATFORM_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
@@ -203,6 +207,39 @@ function ApiConfigDialog({ open, onOpenChange, editingConfig, onSaved }: ApiConf
             </div>
           ))}
 
+          {form.platform === "openai_compatible" && (
+            <div className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => updateField("autoAppendV1Path", !form.autoAppendV1Path)}
+                  className={cn(
+                    "relative w-9 h-5 rounded-full transition-colors duration-200",
+                    form.autoAppendV1Path ? "bg-primary" : "bg-muted-foreground/30"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200",
+                      form.autoAppendV1Path && "translate-x-4"
+                    )}
+                  />
+                </button>
+                <div className="min-w-0">
+                  <Label
+                    className="text-xs text-muted-foreground cursor-pointer"
+                    onClick={() => updateField("autoAppendV1Path", !form.autoAppendV1Path)}
+                  >
+                    自动补充 /v1 路径
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground/70 mt-1">
+                    开启后将请求发送到 /v1/chat/completions、/v1/models；关闭后改为不带 /v1 的路径。
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 备注 */}
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">备注</Label>
@@ -250,6 +287,82 @@ const COMMON_ASPECT_RATIOS = ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2",
 /** 常见分辨率档位 */
 const COMMON_TIERS = ["1K", "2K", "3K", "4K"];
 
+const OPENAI_REASONING_PLATFORMS = new Set([
+  "openai_compatible",
+  "openai",
+  "deepseek",
+  "zhipu",
+  "moonshot",
+  "volcengine",
+  "siliconflow",
+]);
+
+function normalizePlatform(platform: string | null | undefined): string {
+  return (platform || "").toLowerCase();
+}
+
+function isOpenAiReasoningPlatform(platform: string | null | undefined): boolean {
+  return OPENAI_REASONING_PLATFORMS.has(normalizePlatform(platform));
+}
+
+function isAnthropicReasoningPlatform(platform: string | null | undefined): boolean {
+  return normalizePlatform(platform) === "anthropic";
+}
+
+function isDashScopeReasoningPlatform(platform: string | null | undefined): boolean {
+  return normalizePlatform(platform) === "dashscope";
+}
+
+const REASONING_CONFIG_KEYS = [
+  "includeReasoning",
+  "include_reasoning",
+  "reasoningEffort",
+  "reasoning_effort",
+  "thinkingBudget",
+  "thinking_budget",
+  "thinking",
+];
+
+function supportsReasoningConfig(platform: string | null | undefined): boolean {
+  return (
+    isOpenAiReasoningPlatform(platform) ||
+    isAnthropicReasoningPlatform(platform) ||
+    isDashScopeReasoningPlatform(platform)
+  );
+}
+
+function stripReasoningConfig(configJson: string | undefined): string {
+  const next = { ...parseConfigJson(configJson) };
+  REASONING_CONFIG_KEYS.forEach((key) => {
+    delete next[key];
+  });
+  return Object.keys(next).length > 0 ? JSON.stringify(next) : "";
+}
+
+function getPositiveNumberValue(value: number | undefined): number | "" {
+  return value !== undefined && value > 0 ? value : "";
+}
+
+function getChatSamplingFields(platform: string | null | undefined): ConfigFieldDef[] {
+  const normalized = normalizePlatform(platform);
+  const fields: ConfigFieldDef[] = [
+    { key: "temperature", label: "Temperature", type: "range", min: 0, max: 2, step: 0.1, defaultValue: 0.7, hint: "控制输出随机性，值越高越随机" },
+  ];
+
+  if (normalized === "vertex_ai" || normalized === "vertexai" || normalized === "gemini") {
+    return fields;
+  }
+
+  fields.push({ key: "topP", label: "Top P", type: "range", min: 0, max: 1, step: 0.05, defaultValue: 1, hint: "核心采样概率阈值" });
+
+  if (normalized === "ollama") {
+    return fields;
+  }
+
+  fields.push({ key: "maxTokens", label: "Max Tokens", type: "number", min: 1, max: 1000000, step: 1, placeholder: "例如：4096", hint: "单次请求最大输出 token 数" });
+  return fields;
+}
+
 // ---------- supportedSizes 编辑器 ----------
 
 type SizesMap = Record<string, Record<string, string>>;
@@ -270,7 +383,11 @@ function SupportedSizesEditor({
   const toggleCollapse = (tier: string) => {
     setCollapsedTiers(prev => {
       const next = new Set(prev);
-      next.has(tier) ? next.delete(tier) : next.add(tier);
+      if (next.has(tier)) {
+        next.delete(tier);
+      } else {
+        next.add(tier);
+      }
       return next;
     });
   };
@@ -460,7 +577,11 @@ function AspectRatiosEditor({
 
   const toggle = (ratio: string) => {
     const next = new Set(selected);
-    next.has(ratio) ? next.delete(ratio) : next.add(ratio);
+    if (next.has(ratio)) {
+      next.delete(ratio);
+    } else {
+      next.add(ratio);
+    }
     const arr = Array.from(next);
     onChange(arr.length > 0 ? arr : undefined);
   };
@@ -544,14 +665,10 @@ interface ConfigFieldDef {
   presetOptions?: string[];
 }
 
-function getConfigFieldsByModelType(modelType: number): ConfigFieldDef[] {
+function getConfigFieldsByModelType(modelType: number, platform?: string | null): ConfigFieldDef[] {
   switch (modelType) {
     case 1:
-      return [
-        { key: "temperature", label: "Temperature", type: "range", min: 0, max: 2, step: 0.1, defaultValue: 0.7, hint: "控制输出随机性，值越高越随机" },
-        { key: "topP", label: "Top P", type: "range", min: 0, max: 1, step: 0.05, defaultValue: 1, hint: "核心采样概率阈值" },
-        { key: "maxTokens", label: "Max Tokens", type: "number", min: 1, max: 1000000, step: 1, placeholder: "例如：4096", hint: "单次请求最大输出 token 数" },
-      ];
+      return getChatSamplingFields(platform);
     case 2:
       return [
         { key: "defaultWidth", label: "默认宽度", type: "number", min: 256, max: 8192, step: 64, placeholder: "例如：1024" },
@@ -574,12 +691,56 @@ function getConfigFieldsByModelType(modelType: number): ConfigFieldDef[] {
   }
 }
 
+function ToggleSettingCard({
+  checked,
+  title,
+  description,
+  onToggle,
+}: {
+  checked: boolean;
+  title: string;
+  description: string;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border/30 bg-background/70 px-3 py-2.5">
+      <div className="flex items-start gap-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          className={cn(
+            "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors duration-200",
+            checked ? "bg-primary" : "bg-muted-foreground/30"
+          )}
+        >
+          <span
+            className={cn(
+              "absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform duration-200",
+              checked && "translate-x-4"
+            )}
+          />
+        </button>
+        <div className="min-w-0">
+          <Label className="cursor-pointer text-xs text-muted-foreground" onClick={onToggle}>
+            {title}
+          </Label>
+          <p className="mt-1 text-[10px] leading-5 text-muted-foreground/70">{description}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModelConfigForm({
   modelType,
+  platform,
+  supportReasoning,
   configJson,
   onChange,
 }: {
   modelType: number;
+  platform?: string | null;
+  supportReasoning: boolean;
   configJson: string | undefined;
   onChange: (json: string) => void;
 }) {
@@ -588,7 +749,17 @@ function ModelConfigForm({
   const [rawJsonError, setRawJsonError] = useState(false);
 
   const configObj = parseConfigJson(configJson);
-  const fields = getConfigFieldsByModelType(modelType);
+  const normalizedPlatform = normalizePlatform(platform);
+  const fields = getConfigFieldsByModelType(modelType, platform);
+  const showReasoningConfig = modelType === 1 && supportReasoning;
+  const includeReasoningMode = configObj.includeReasoning === true
+    ? "true"
+    : configObj.includeReasoning === false
+      ? "false"
+      : "auto";
+  const reasoningEffortValue = typeof configObj.reasoningEffort === "string"
+    ? configObj.reasoningEffort
+    : "__unset__";
 
   const emitChange = (next: Record<string, unknown>) => {
     const cleaned = Object.fromEntries(
@@ -614,6 +785,18 @@ function ModelConfigForm({
       delete next[key];
     } else {
       next[key] = value;
+    }
+    emitChange(next);
+  };
+
+  const updateSelectField = (key: string, rawValue: string) => {
+    const next = { ...configObj };
+    if (rawValue === "auto" || rawValue === "__unset__") {
+      delete next[key];
+    } else if (rawValue === "true" || rawValue === "false") {
+      next[key] = rawValue === "true";
+    } else {
+      next[key] = rawValue;
     }
     emitChange(next);
   };
@@ -779,6 +962,102 @@ function ModelConfigForm({
                     />
                   </div>
                 ))}
+
+              {showReasoningConfig && isOpenAiReasoningPlatform(normalizedPlatform) && (
+                <div className="rounded-lg border border-border/40 bg-muted/20 p-3 space-y-3">
+                  <div>
+                    <Label className="text-[11px] text-muted-foreground">思考内容返回</Label>
+                    <p className="text-[10px] text-muted-foreground/70 mt-1">自动模式下，只要开启“支持思考”或填写推理参数，后端会自动请求 reasoning 内容。</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Select
+                      value={includeReasoningMode}
+                      onValueChange={v => updateSelectField("includeReasoning", String(v))}
+                      items={[
+                        { value: "auto", label: "自动" },
+                        { value: "true", label: "显式返回思考内容" },
+                        { value: "false", label: "显式关闭思考内容返回" },
+                      ]}
+                    >
+                      <SelectTrigger className="w-full text-sm">
+                        <SelectValue placeholder="选择思考内容返回策略" />
+                      </SelectTrigger>
+                      <SelectContent className="text-sm">
+                        <SelectGroup>
+                          <SelectItem value="auto" className="text-sm">自动</SelectItem>
+                          <SelectItem value="true" className="text-sm">显式返回思考内容</SelectItem>
+                          <SelectItem value="false" className="text-sm">显式关闭思考内容返回</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] text-muted-foreground">Reasoning Effort</Label>
+                      <Select
+                        value={reasoningEffortValue}
+                        onValueChange={v => updateSelectField("reasoningEffort", String(v))}
+                        items={[
+                          { value: "__unset__", label: "自动" },
+                          { value: "low", label: "Low" },
+                          { value: "medium", label: "Medium" },
+                          { value: "high", label: "High" },
+                        ]}
+                      >
+                        <SelectTrigger className="w-full text-sm">
+                          <SelectValue placeholder="选择推理强度" />
+                        </SelectTrigger>
+                        <SelectContent className="text-sm">
+                          <SelectGroup>
+                            <SelectItem value="__unset__" className="text-sm">自动</SelectItem>
+                            <SelectItem value="low" className="text-sm">Low</SelectItem>
+                            <SelectItem value="medium" className="text-sm">Medium</SelectItem>
+                            <SelectItem value="high" className="text-sm">High</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] text-muted-foreground">Thinking Budget</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        placeholder="例如：2048"
+                        value={getPositiveNumberValue(typeof configObj.thinkingBudget === "number" ? configObj.thinkingBudget : undefined)}
+                        onChange={e => updateSimpleField("thinkingBudget", e.target.value)}
+                        className="text-xs font-mono h-8"
+                      />
+                      <p className="text-[10px] text-muted-foreground/70">面向支持 reasoning budget 的 OpenAI 兼容渠道。</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showReasoningConfig && isAnthropicReasoningPlatform(normalizedPlatform) && (
+                <div className="rounded-lg border border-border/40 bg-muted/20 p-3 space-y-1.5">
+                  <Label className="text-[11px] text-muted-foreground">Thinking Budget</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="例如：1024"
+                    value={getPositiveNumberValue(typeof configObj.thinkingBudget === "number" ? configObj.thinkingBudget : undefined)}
+                    onChange={e => updateSimpleField("thinkingBudget", e.target.value)}
+                    className="text-xs font-mono h-8"
+                  />
+                  <p className="text-[10px] text-muted-foreground/70">Claude 开启“支持思考”后，未填写时后端默认使用 1024。更细粒度的 thinking 结构仍可通过 JSON 编辑器覆盖。</p>
+                </div>
+              )}
+
+              {showReasoningConfig && isDashScopeReasoningPlatform(normalizedPlatform) && (
+                <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
+                  <p className="text-[10px] text-muted-foreground/70">DashScope 的思考模式由下方“支持思考”能力开关控制；如果后续需要 provider 专属参数，仍可使用 JSON 编辑器补充。</p>
+                </div>
+              )}
             </>
           ) : (
             <p className="text-[10px] text-muted-foreground/60 italic">当前模型类型无预定义配置项，可点击「编辑 JSON」手动配置</p>
@@ -786,6 +1065,267 @@ function ModelConfigForm({
         </div>
       )}
     </div>
+  );
+}
+
+// ============================================================
+// 从远程 API 获取模型列表 Dialog
+// ============================================================
+
+interface FetchRemoteModelsDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  apiConfig: ApiConfig;
+  existingModelCodes: Set<string>;
+  onAdded: () => void;
+}
+
+function FetchRemoteModelsDialog({
+  open,
+  onOpenChange,
+  apiConfig,
+  existingModelCodes,
+  onAdded,
+}: FetchRemoteModelsDialogProps) {
+  const [loading, setLoading] = useState(false);
+  const [remoteModels, setRemoteModels] = useState<RemoteModel[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [modelType, setModelType] = useState<number>(1);
+
+  const fetchModels = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const models = await apiConfigApi.remoteModels(apiConfig.id);
+      setRemoteModels(models);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "获取模型列表失败";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiConfig.id]);
+
+  useEffect(() => {
+    if (open) {
+      setRemoteModels([]);
+      setError(null);
+      setSelectedIds(new Set());
+      setSearchQuery("");
+      fetchModels();
+    }
+  }, [fetchModels, open]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const filtered = filteredModels;
+    const allSelected = filtered.every(m => selectedIds.has(m.id));
+    if (allSelected) {
+      const next = new Set(selectedIds);
+      filtered.forEach(m => next.delete(m.id));
+      setSelectedIds(next);
+    } else {
+      const next = new Set(selectedIds);
+      filtered.forEach(m => {
+        if (!existingModelCodes.has(m.id)) {
+          next.add(m.id);
+        }
+      });
+      setSelectedIds(next);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (selectedIds.size === 0) return;
+    setAdding(true);
+    try {
+      for (const modelId of selectedIds) {
+        await aiModelApi.create({
+          name: modelId,
+          code: modelId,
+          modelType: modelType,
+          apiConfigId: apiConfig.id,
+        });
+      }
+      onAdded();
+      onOpenChange(false);
+    } catch (err) {
+      console.error("添加模型失败:", err);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const filteredModels = remoteModels.filter(m => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return m.id.toLowerCase().includes(q) || (m.ownedBy && m.ownedBy.toLowerCase().includes(q));
+  });
+
+  const selectableCount = filteredModels.filter(m => !existingModelCodes.has(m.id)).length;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg flex flex-col max-h-[85vh]">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>获取可用模型</DialogTitle>
+          <DialogDescription>
+            从 {apiConfig.name} 获取远程可用模型列表，选择后点击添加
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3 min-h-0">
+          {/* 搜索框 + 模型类型选择 */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="搜索模型..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="text-sm pl-8 h-8"
+              />
+            </div>
+            <Select
+              value={modelType}
+              onValueChange={v => setModelType(v as number)}
+              items={MODEL_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            >
+              <SelectTrigger className="w-[120px] text-xs h-8">
+                <SelectValue placeholder="模型类型" />
+              </SelectTrigger>
+              <SelectContent className="text-xs">
+                <SelectGroup>
+                  {MODEL_TYPE_OPTIONS.map(opt => (
+                    <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 模型列表 */}
+          {loading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">正在获取模型列表...</span>
+            </div>
+          ) : error ? (
+            <div className="text-center py-8 space-y-2">
+              <p className="text-sm text-destructive">{error}</p>
+              <Button variant="outline" size="sm" onClick={fetchModels}>
+                重试
+              </Button>
+            </div>
+          ) : remoteModels.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-muted-foreground">未获取到模型</p>
+            </div>
+          ) : (
+            <>
+              {/* 全选 + 计数 */}
+              <div className="flex items-center justify-between px-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleSelectAll}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {filteredModels.filter(m => !existingModelCodes.has(m.id)).every(m => selectedIds.has(m.id)) && selectableCount > 0
+                    ? "取消全选"
+                    : "全选可添加"}
+                </button>
+                <span className="text-[10px] text-muted-foreground">
+                  共 {filteredModels.length} 个模型，已选 {selectedIds.size} 个
+                </span>
+              </div>
+
+              <div className="overflow-y-auto min-h-0 max-h-[400px] -mx-1 px-1 space-y-0.5">
+                {filteredModels.map(model => {
+                  const alreadyExists = existingModelCodes.has(model.id);
+                  const isSelected = selectedIds.has(model.id);
+
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      onClick={() => !alreadyExists && toggleSelect(model.id)}
+                      disabled={alreadyExists}
+                      className={cn(
+                        "flex items-center gap-3 w-full px-3 py-2 rounded-lg text-left transition-all duration-150",
+                        alreadyExists
+                          ? "opacity-50 cursor-not-allowed"
+                          : isSelected
+                            ? "bg-primary/10 border border-primary/30"
+                            : "hover:bg-muted/50 border border-transparent"
+                      )}
+                    >
+                      {/* 选择框 */}
+                      <div className={cn(
+                        "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                        alreadyExists
+                          ? "bg-muted border-border"
+                          : isSelected
+                            ? "bg-primary border-primary"
+                            : "border-border/60"
+                      )}>
+                        {(isSelected || alreadyExists) && (
+                          <Check className={cn("h-3 w-3", alreadyExists ? "text-muted-foreground" : "text-primary-foreground")} />
+                        )}
+                      </div>
+
+                      {/* 模型信息 */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-mono truncate">{model.id}</p>
+                        {model.ownedBy && (
+                          <p className="text-[10px] text-muted-foreground">{model.ownedBy}</p>
+                        )}
+                      </div>
+
+                      {/* 已添加标记 */}
+                      {alreadyExists && (
+                        <span className="text-[10px] text-muted-foreground shrink-0 px-1.5 py-0.5 rounded bg-muted">
+                          已添加
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        <DialogFooter className="shrink-0">
+          <DialogClose render={<Button variant="outline" size="sm" />}>
+            取消
+          </DialogClose>
+          <Button
+            size="sm"
+            onClick={handleAdd}
+            disabled={adding || selectedIds.size === 0}
+          >
+            {adding && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+            添加 {selectedIds.size > 0 ? `(${selectedIds.size})` : ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -808,6 +1348,10 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
     name: "",
     code: "",
     modelType: 1,
+    maxConcurrency: 5,
+    supportVision: false,
+    supportReasoning: false,
+    contextWindow: 0,
   });
   const [presets, setPresets] = useState<ModelPreset[]>([]);
   const [selectedPresetCode, setSelectedPresetCode] = useState<string | null>(null);
@@ -822,30 +1366,60 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
           modelType: editingModel.modelType,
           description: editingModel.description || "",
           config: editingModel.config || "",
+          maxConcurrency: editingModel.maxConcurrency ?? 5,
           defaultModel: editingModel.defaultModel,
+          supportVision: editingModel.supportVision,
+          supportReasoning: editingModel.supportReasoning,
+          contextWindow: editingModel.contextWindow ?? 0,
           apiConfigId: editingModel.apiConfigId ?? undefined,
           status: editingModel.status,
         });
         setSelectedPresetCode(null);
       } else {
-        setForm({ name: "", code: "", modelType: 1, defaultModel: false, apiConfigId: defaultApiConfigId });
+        setForm({
+          name: "",
+          code: "",
+          modelType: 1,
+          maxConcurrency: 5,
+          defaultModel: false,
+          supportVision: false,
+          supportReasoning: false,
+          contextWindow: 0,
+          apiConfigId: defaultApiConfigId,
+        });
         setSelectedPresetCode(null);
-        const currentPlatform = apiConfigs.find(c => c.id === defaultApiConfigId)?.platform;
-        aiModelApi.presets().then(all => {
-          setPresets(currentPlatform ? all.filter(p => p.platform === currentPlatform) : all);
-        }).catch(console.error);
+        aiModelApi.presets().then(setPresets).catch(console.error);
       }
     }
-  }, [open, editingModel, defaultApiConfigId, apiConfigs]);
+  }, [open, editingModel, defaultApiConfigId]);
 
   const updateField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm(prev => ({ ...prev, [key]: value }));
   };
 
+  const updateMetaNumberField = (key: "maxConcurrency" | "contextWindow", rawValue: string) => {
+    if (!rawValue.trim()) {
+      updateField(key, 0);
+      return;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
+    updateField(key, Number.isNaN(parsed) ? 0 : parsed);
+  };
+
+  const selectedApiConfig = apiConfigs.find(c => c.id === form.apiConfigId);
+  const selectedPlatform = selectedApiConfig?.platform;
+  const visiblePresets = !selectedPlatform
+    ? presets
+    : presets.filter(p => p.platform === selectedPlatform);
+
   const handleSave = async () => {
-    if (!form.name.trim() || !form.code.trim()) return;
+    if (!form.name.trim() || !form.code.trim() || !form.apiConfigId) return;
     setSaving(true);
     try {
+      const normalizedConfig = form.modelType === 1 && form.supportReasoning && supportsReasoningConfig(selectedPlatform)
+        ? form.config
+        : stripReasoningConfig(form.config);
+
       if (editingModel) {
         const updateReq: AiModelUpdateReq = {
           id: editingModel.id,
@@ -853,14 +1427,21 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
           code: form.code,
           modelType: form.modelType,
           description: form.description,
-          config: form.config,
+          config: normalizedConfig,
+          maxConcurrency: form.maxConcurrency,
           defaultModel: form.defaultModel,
+          supportVision: form.supportVision,
+          supportReasoning: form.supportReasoning,
+          contextWindow: form.contextWindow,
           apiConfigId: form.apiConfigId,
           status: form.status,
         };
         await aiModelApi.update(updateReq);
       } else {
-        await aiModelApi.create(form);
+        await aiModelApi.create({
+          ...form,
+          config: normalizedConfig,
+        });
       }
       onSaved();
       onOpenChange(false);
@@ -883,14 +1464,14 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
 
         <div className="space-y-4 overflow-y-auto min-h-0 px-2 -mx-2">
           {/* 预设快速选择 */}
-          {!editingModel && presets.length > 0 && (
+          {!editingModel && visiblePresets.length > 0 && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground flex items-center gap-1">
                 <Sparkles className="h-3 w-3" />
                 从预设导入
               </Label>
               <div className="flex flex-wrap gap-1.5">
-                {presets.map(preset => (
+                {visiblePresets.map(preset => (
                   <button
                     key={preset.code}
                     type="button"
@@ -925,7 +1506,7 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">模型名称 <span className="text-destructive">*</span></Label>
             <Input
-              placeholder="例如：DeepSeek Chat / GPT-4o"
+              placeholder="例如：claude-sonnet-4.5"
               value={form.name}
               onChange={e => updateField("name", e.target.value)}
               className="text-sm"
@@ -936,7 +1517,7 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">模型标识 (code) <span className="text-destructive">*</span></Label>
             <Input
-              placeholder="例如：deepseek-chat / gpt-4o"
+              placeholder="例如：claude-sonnet-4.5"
               value={form.code}
               onChange={e => updateField("code", e.target.value)}
               className="text-sm font-mono"
@@ -949,7 +1530,19 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
             <Label className="text-xs text-muted-foreground">模型类型</Label>
             <Select
               value={form.modelType}
-              onValueChange={v => updateField("modelType", v as number)}
+              onValueChange={v => {
+                const nextType = v as number;
+                setForm(prev => {
+                  const next = { ...prev, modelType: nextType };
+                  if (nextType !== 1) {
+                    next.supportVision = false;
+                    next.supportReasoning = false;
+                    next.contextWindow = 0;
+                    next.config = stripReasoningConfig(prev.config);
+                  }
+                  return next;
+                });
+              }}
               items={MODEL_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
             >
               <SelectTrigger className="w-full text-sm">
@@ -972,7 +1565,18 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
             <Label className="text-xs text-muted-foreground">关联 API 配置 <span className="text-destructive">*</span></Label>
             <Select
               value={form.apiConfigId}
-              onValueChange={v => updateField("apiConfigId", v as number)}
+              onValueChange={v => {
+                const nextApiConfigId = v as number;
+                const nextPlatform = apiConfigs.find(c => c.id === nextApiConfigId)?.platform;
+                setForm(prev => {
+                  const next = { ...prev, apiConfigId: nextApiConfigId };
+                  if (!supportsReasoningConfig(nextPlatform)) {
+                    next.supportReasoning = false;
+                    next.config = stripReasoningConfig(prev.config);
+                  }
+                  return next;
+                });
+              }}
               items={apiConfigs.map(c => ({ value: c.id, label: `${c.name}${c.platform ? ` (${PLATFORM_LABELS[c.platform] || c.platform})` : ""}` }))}
             >
               <SelectTrigger className="w-full text-sm">
@@ -1014,9 +1618,81 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
             </Label>
           </div>
 
+          <div className="rounded-lg border border-border/40 bg-muted/20 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label className="text-xs text-muted-foreground">高级能力</Label>
+              {selectedPlatform && (
+                <span className="px-2 py-1 rounded-md bg-background/80 text-[10px] text-muted-foreground">
+                  {PLATFORM_LABELS[selectedPlatform] || selectedPlatform}
+                </span>
+              )}
+            </div>
+
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">最大并发数</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="默认 5"
+                  value={getPositiveNumberValue(form.maxConcurrency)}
+                  onChange={e => updateMetaNumberField("maxConcurrency", e.target.value)}
+                  className="text-sm font-mono"
+                />
+                <p className="text-[10px] text-muted-foreground/70">用于模型级别的并发治理，留空或置空时回落到默认值 5。</p>
+              </div>
+
+              {form.modelType === 1 && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">上下文窗口</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="例如：128000"
+                    value={getPositiveNumberValue(form.contextWindow)}
+                    onChange={e => updateMetaNumberField("contextWindow", e.target.value)}
+                    className="text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-muted-foreground/70">用于标记该模型的上下文容量；留空表示不额外声明。</p>
+                </div>
+              )}
+            </div>
+
+            {form.modelType === 1 && (
+              <div className="space-y-2.5">
+                <ToggleSettingCard
+                  checked={!!form.supportReasoning}
+                  title="支持思考"
+                  description="作为模型能力兜底开关；在 Anthropic、DashScope、OpenAI 兼容渠道会触发 reasoning 默认逻辑。"
+                  onToggle={() => {
+                    setForm(prev => {
+                      const nextSupportReasoning = !prev.supportReasoning;
+                      return {
+                        ...prev,
+                        supportReasoning: nextSupportReasoning,
+                        config: nextSupportReasoning ? prev.config : stripReasoningConfig(prev.config),
+                      };
+                    });
+                  }}
+                />
+
+                <ToggleSettingCard
+                  checked={!!form.supportVision}
+                  title="支持视觉输入"
+                  description="用于标记该对话模型支持图片等多模态输入，便于后续业务端做能力过滤。"
+                  onToggle={() => updateField("supportVision", !form.supportVision)}
+                />
+              </div>
+            )}
+          </div>
+
           {/* 模型配置 */}
           <ModelConfigForm
             modelType={form.modelType}
+            platform={selectedPlatform}
+            supportReasoning={!!form.supportReasoning}
             configJson={form.config}
             onChange={json => updateField("config", json)}
           />
@@ -1026,7 +1702,7 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
           <DialogClose render={<Button variant="outline" size="sm" />}>
             取消
           </DialogClose>
-          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.code.trim()}>
+          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.code.trim() || !form.apiConfigId}>
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
             {editingModel ? "保存" : "创建"}
           </Button>
@@ -1043,7 +1719,6 @@ function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, defaultAp
 export default function AiModelsPage() {
   // AI 模型列表
   const [models, setModels] = useState<AiModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(true);
 
   // API 配置列表
   const [configs, setConfigs] = useState<ApiConfig[]>([]);
@@ -1055,21 +1730,15 @@ export default function AiModelsPage() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<AiModel | null>(null);
   const [modelDialogApiConfigId, setModelDialogApiConfigId] = useState<number | undefined>(undefined);
-
-  useEffect(() => {
-    loadModels();
-    loadConfigs();
-  }, []);
+  const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false);
+  const [fetchModelsConfig, setFetchModelsConfig] = useState<ApiConfig | null>(null);
 
   const loadModels = useCallback(async () => {
     try {
-      setModelsLoading(true);
       const data = await aiModelApi.list();
       setModels(data);
     } catch (err) {
       console.error("加载 AI 模型列表失败:", err);
-    } finally {
-      setModelsLoading(false);
     }
   }, []);
 
@@ -1084,6 +1753,11 @@ export default function AiModelsPage() {
       setConfigsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    loadModels();
+    loadConfigs();
+  }, [loadConfigs, loadModels]);
 
   const handleDeleteModel = async (id: number) => {
     if (!confirm("确定要删除该 AI 模型吗？")) return;
@@ -1204,6 +1878,13 @@ export default function AiModelsPage() {
                     </div>
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
+                        onClick={() => { setFetchModelsConfig(config); setFetchModelsDialogOpen(true); }}
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                        title="获取可用模型列表"
+                      >
+                        <CloudDownload className="h-3.5 w-3.5" />
+                      </button>
+                      <button
                         onClick={() => { setEditingConfig(config); setConfigDialogOpen(true); }}
                         className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
                       >
@@ -1271,6 +1952,17 @@ export default function AiModelsPage() {
                                   </div>
                                   <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5">
                                     <span className="font-mono px-1 py-0.5 rounded bg-muted/40">{model.code}</span>
+                                    {model.supportReasoning && (
+                                      <span className="px-1 py-0.5 rounded bg-sky-500/10 text-sky-500">思考</span>
+                                    )}
+                                    {model.supportVision && (
+                                      <span className="px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-500">视觉</span>
+                                    )}
+                                    {model.contextWindow && model.contextWindow > 0 && (
+                                      <span className="px-1 py-0.5 rounded bg-muted/50 text-muted-foreground">
+                                        {model.contextWindow.toLocaleString()} ctx
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
@@ -1360,6 +2052,15 @@ export default function AiModelsPage() {
         defaultApiConfigId={modelDialogApiConfigId}
         onSaved={() => { loadModels(); }}
       />
+      {fetchModelsConfig && (
+        <FetchRemoteModelsDialog
+          open={fetchModelsDialogOpen}
+          onOpenChange={setFetchModelsDialogOpen}
+          apiConfig={fetchModelsConfig}
+          existingModelCodes={new Set(models.filter(m => m.apiConfigId === fetchModelsConfig.id).map(m => m.code))}
+          onAdded={() => { loadModels(); }}
+        />
+      )}
     </motion.div>
   );
 }

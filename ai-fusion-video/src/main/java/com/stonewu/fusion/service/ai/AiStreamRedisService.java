@@ -50,10 +50,10 @@ public class AiStreamRedisService {
     private static final Duration STREAM_TTL = Duration.ofHours(1);
     /** Stream 最大长度 —— 只需保存最近一次合并到当前的增量 token */
     private static final long STREAM_MAXLEN = 200;
-    /** XREAD BLOCK 超时时间 */
-    private static final Duration READ_BLOCK_TIMEOUT = Duration.ofMillis(200);
-    /** 每次 XREAD 读取的最大消息数 */
-    private static final int READ_BATCH_SIZE = 10;
+    /** XREAD BLOCK 超时时间。调低以减少实时 SSE 的感知延迟。 */
+    private static final Duration READ_BLOCK_TIMEOUT = Duration.ofMillis(50);
+    /** 每次 XREAD 读取的最大消息数。保持为 1 以尽量按单事件透传。 */
+    private static final int READ_BATCH_SIZE = 1;
 
     // ===== 写入端（后台 AI 任务调用） =====
 

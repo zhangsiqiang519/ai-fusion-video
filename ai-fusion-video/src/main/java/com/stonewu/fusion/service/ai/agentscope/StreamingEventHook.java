@@ -140,24 +140,19 @@ public class StreamingEventHook implements Hook {
 
         Msg incrementalChunk = event.getIncrementalChunk();
         if (incrementalChunk == null) {
+            log.debug("[StreamingEventHook] 收到event: {}, agent={}, parentCallId={}, chunk=null",
+                    event.getClass().getSimpleName(), agentName, parentCallId);
             return;
         }
+
+        log.debug("[StreamingEventHook] 收到event: {}, agent={}, parentCallId={}, textContent={}",
+                event.getClass().getSimpleName(), agentName, parentCallId, incrementalChunk.getTextContent());
 
         for (ContentBlock block : incrementalChunk.getContent()) {
             if (block instanceof ThinkingBlock thinkingBlock) {
                 String thinkingText = thinkingBlock.getThinking();
                 if (thinkingText != null && !thinkingText.isEmpty()) {
-                    reasoningStartTimes.putIfAbsent(agentKey, System.currentTimeMillis());
-
-                    emitEvent(new AiChatStreamRespVO()
-                            .setMessageId(messageId)
-                            .setConversationId(conversationId)
-                            .setOutputType("REASONING")
-                            .setReasoningContent(thinkingText)
-                            .setReasoningStartTime(reasoningStartTimes.get(agentKey))
-                            .setParentToolCallId(parentCallId)
-                            .setAgentName(isSubAgent(agentName) ? agentName : null)
-                            .setFinished(false));
+                    emitReasoningEvent(agentName, agentKey, parentCallId, thinkingText, "ThinkingBlock");
                 }
             } else if (block instanceof TextBlock textBlock) {
                 String text = textBlock.getText();
@@ -191,7 +186,11 @@ public class StreamingEventHook implements Hook {
      * 推理完成：LLM 生成结束，清理当前轮的状态
      */
     private void handlePostReasoning(PostReasoningEvent event) {
+        String agentName = event.getAgent().getName();
         String agentKey = getAgentKey(event);
+        String parentCallId = resolveParentCallId(event);
+
+        emitReasoningDurationIfNeeded(agentName, agentKey, parentCallId);
         reasoningStartTimes.remove(agentKey);
         reasoningDurations.remove(agentKey);
     }
@@ -385,6 +384,42 @@ public class StreamingEventHook implements Hook {
                     event.getContent() != null ? event.getContent().substring(0, Math.min(event.getContent().length(), 100)) : null,
                     Thread.currentThread().getName());
         }
+    }
+
+    private void emitReasoningEvent(String agentName, String agentKey, String parentCallId,
+            String reasoningText, String sourceType) {
+        reasoningStartTimes.putIfAbsent(agentKey, System.currentTimeMillis());
+        log.debug("[StreamingEventHook] 思考增量: agent={}, parentCallId={}, sourceType={}, content={}",
+                agentName, parentCallId, sourceType, reasoningText);
+
+        emitEvent(new AiChatStreamRespVO()
+                .setMessageId(messageId)
+                .setConversationId(conversationId)
+                .setOutputType("REASONING")
+                .setReasoningContent(reasoningText)
+                .setReasoningStartTime(reasoningStartTimes.get(agentKey))
+                .setParentToolCallId(parentCallId)
+                .setAgentName(isSubAgent(agentName) ? agentName : null)
+                .setFinished(false));
+    }
+
+    private void emitReasoningDurationIfNeeded(String agentName, String agentKey, String parentCallId) {
+        Long startTime = reasoningStartTimes.get(agentKey);
+        if (startTime == null || reasoningDurations.containsKey(agentKey)) {
+            return;
+        }
+
+        Long durationMs = System.currentTimeMillis() - startTime;
+        reasoningDurations.put(agentKey, durationMs);
+
+        emitEvent(new AiChatStreamRespVO()
+                .setMessageId(messageId)
+                .setConversationId(conversationId)
+                .setOutputType("CONTENT")
+                .setReasoningDurationMs(durationMs)
+                .setParentToolCallId(parentCallId)
+                .setAgentName(isSubAgent(agentName) ? agentName : null)
+                .setFinished(false));
     }
 
     /**

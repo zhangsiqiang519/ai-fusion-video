@@ -11,6 +11,7 @@ public class ApiConfigRespVO {
     private String name;
     private String platform;
     private String apiUrl;
+    private Boolean autoAppendV1Path;
     private String apiKey;
     private String appId;
     private String appSecret;
@@ -18,4 +19,5 @@ public class ApiConfigRespVO {
     private Integer status;
     private String remark;
     private LocalDateTime createTime;
+    private LocalDateTime updateTime;
 }

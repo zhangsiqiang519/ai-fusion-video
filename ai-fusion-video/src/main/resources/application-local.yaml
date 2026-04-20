@@ -30,5 +30,5 @@ logging:
   level:
     com.stonewu.fusion: DEBUG
     org.springframework.ai: DEBUG
-    # 需要看 SQL 时打开下面这行
-    # com.stonewu.fusion.mapper: DEBUG
+    # 需要关闭 SQL 日志时打开下面这行
+    com.stonewu.fusion.mapper: INFO

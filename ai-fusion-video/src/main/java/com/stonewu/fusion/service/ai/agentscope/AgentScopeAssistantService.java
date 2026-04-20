@@ -35,7 +35,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 import com.stonewu.fusion.service.ai.AiStreamRedisService.StreamEventAccumulator;
 import com.stonewu.fusion.service.ai.AiStreamRedisService.StreamEventAccumulator.AccumulatedEvent;
 import reactor.core.publisher.Sinks;
@@ -46,6 +48,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AgentScope 版 AI 助手服务
@@ -195,6 +198,7 @@ public class AgentScopeAssistantService {
             // 11. Redis Stream 初始化
             aiStreamRedisService.cleanup(conversationId);
             aiStreamRedisService.markActive(conversationId);
+            AtomicReference<String> terminalStatus = new AtomicReference<>("running");
 
             // 12. 用于累积主 Agent 的 REASONING 和 CONTENT 增量文本
             StringBuilder reasoningAccumulator = new StringBuilder();
@@ -202,40 +206,24 @@ public class AgentScopeAssistantService {
             // 记录思考耗时
             long[] reasoningDuration = { 0L };
 
-            // 13. 后台异步调用 Agent
-            // agent.call() 返回 Mono<Msg>，Hook 会在执行过程中推送事件
-            Disposable agentDisposable = agent.call(userMsg)
-                    .doOnSuccess(response -> {
-                        agentCallSubscriptions.remove(conversationId);
-                        // 发送 DONE 事件（不再在此保存 assistant 消息，改为在事件流中根据累积文本保存）
-                        eventSink.tryEmitNext(new AiChatStreamRespVO()
-                                .setMessageId(messageId)
-                                .setConversationId(conversationId)
-                                .setOutputType("DONE")
-                                .setFinished(true));
-                        eventSink.tryEmitComplete();
-                    })
-                    .doOnError(e -> {
-                        agentCallSubscriptions.remove(conversationId);
-                        log.error("[AgentScope:stream] Agent 调用出错", e);
-                        eventSink.tryEmitNext(new AiChatStreamRespVO()
-                                .setMessageId(messageId)
-                                .setConversationId(conversationId)
-                                .setOutputType("ERROR")
-                                .setError(e.getMessage())
-                                .setFinished(true));
-                        eventSink.tryEmitComplete();
-                    })
-                    .subscribe();
-            agentCallSubscriptions.put(conversationId, agentDisposable);
-
-            // 14. 创建事件合并累积器（用于 Replay List）
+                // 13. 创建事件合并累积器（用于 Replay List）
             StreamEventAccumulator accumulator = new StreamEventAccumulator(conversationId);
 
-            // 15. 将 eventSink 的 Flux 写入 Redis Stream + Replay List，并同步持久化中间步骤
+                // 14. 先挂上事件订阅，再启动 Agent，避免早期 reasoning token 在无订阅者时丢失。
+                // 同时将 Redis / DB 写入切到 boundedElastic，避免阻塞 Hook 线程导致上游 chunk 堆积。
             Disposable redisSubscription = eventSink.asFlux()
+                    .publishOn(Schedulers.boundedElastic())
                     .takeWhile(event -> !isCancelled(conversationId))
                     .doOnNext(event -> {
+                        String outputType = event.getOutputType();
+                        if ("ERROR".equals(outputType)) {
+                            terminalStatus.set("failed");
+                        } else if ("CANCELLED".equals(outputType)) {
+                            terminalStatus.set("cancelled");
+                        } else if ("DONE".equals(outputType)) {
+                            terminalStatus.compareAndSet("running", "completed");
+                        }
+
                         // 写入 Redis Stream（实时通道，逐 token）
                         String streamId = aiStreamRedisService.publish(conversationId, event);
 
@@ -260,7 +248,11 @@ public class AgentScopeAssistantService {
                             aiStreamRedisService.appendReplayEvent(
                                     conversationId, remaining.getEvent(), remaining.getLastStreamId());
                         }
-                        aiStreamRedisService.markCompleted(conversationId);
+                        if ("failed".equals(terminalStatus.get())) {
+                            aiStreamRedisService.markError(conversationId);
+                        } else {
+                            aiStreamRedisService.markCompleted(conversationId);
+                        }
                         aiStreamRedisService.scheduleCleanup(conversationId);
                     })
                     .doOnError(e -> {
@@ -287,12 +279,17 @@ public class AgentScopeAssistantService {
                         agentCallSubscriptions.remove(conversationId);
 
                         boolean wasCancelled = signalType == SignalType.CANCEL
+                                || "cancelled".equals(terminalStatus.get())
                                 || (signalType == SignalType.ON_COMPLETE && isCancelled(conversationId));
 
-                        String finalStatus = switch (signalType) {
-                            case ON_ERROR -> "failed";
-                            default -> wasCancelled ? "cancelled" : "completed";
-                        };
+                        String finalStatus;
+                        if (signalType == SignalType.ON_ERROR || "failed".equals(terminalStatus.get())) {
+                            finalStatus = "failed";
+                        } else if (wasCancelled) {
+                            finalStatus = "cancelled";
+                        } else {
+                            finalStatus = "completed";
+                        }
                         conversationService.finish(conversationId, finalStatus);
                         clearCancelFlag(conversationId);
                     })
@@ -300,11 +297,48 @@ public class AgentScopeAssistantService {
 
             activeSubscriptions.put(conversationId, redisSubscription);
 
+                    // 15. 后台异步调用 Agent
+                    // agent.call() 返回 Mono<Msg>，Hook 会在执行过程中推送事件
+                    Disposable agentDisposable = agent.call(userMsg)
+                        .doOnSuccess(response -> {
+                        agentCallSubscriptions.remove(conversationId);
+                        terminalStatus.compareAndSet("running", "completed");
+                        // 发送 DONE 事件（不再在此保存 assistant 消息，改为在事件流中根据累积文本保存）
+                        eventSink.tryEmitNext(new AiChatStreamRespVO()
+                            .setMessageId(messageId)
+                            .setConversationId(conversationId)
+                            .setOutputType("DONE")
+                            .setFinished(true));
+                        eventSink.tryEmitComplete();
+                        })
+                        .doOnError(e -> {
+                        agentCallSubscriptions.remove(conversationId);
+                        terminalStatus.set("failed");
+                        log.error("[AgentScope:stream] Agent 调用出错", e);
+                        eventSink.tryEmitNext(new AiChatStreamRespVO()
+                            .setMessageId(messageId)
+                            .setConversationId(conversationId)
+                            .setOutputType("ERROR")
+                            .setError(e.getMessage())
+                            .setFinished(true));
+                        eventSink.tryEmitComplete();
+                        })
+                        .onErrorResume(e -> Mono.empty())
+                        .subscribe();
+                    agentCallSubscriptions.put(conversationId, agentDisposable);
+
             // SSE 从 Redis Stream 读取（实时逐 token）
             return aiStreamRedisService.subscribe(conversationId);
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             log.error("[AgentScope:stream] 初始化失败", e);
+            try {
+                conversationService.finish(conversationId, "failed");
+                aiStreamRedisService.markError(conversationId);
+                aiStreamRedisService.scheduleCleanup(conversationId);
+            } catch (Exception statusError) {
+                log.warn("[AgentScope:stream] 初始化失败后的状态回写失败: {}", conversationId, statusError);
+            }
             return Flux.just(new AiChatStreamRespVO()
                     .setMessageId(IdUtil.fastSimpleUUID())
                     .setConversationId(conversationId)
