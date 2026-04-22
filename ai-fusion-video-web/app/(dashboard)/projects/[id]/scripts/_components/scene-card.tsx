@@ -177,8 +177,8 @@ export function SceneCard({
       setDirty(false);
       onSceneUpdated(updated);
       toast.success("场次保存成功");
-    } catch (err: any) {
-      toast.error(err?.message || "保存场次失败");
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "保存场次失败");
     } finally {
       setSaving(false);
     }

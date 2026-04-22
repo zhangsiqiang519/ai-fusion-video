@@ -61,6 +61,7 @@ export type TimelineItem =
       /** 子 Agent 的嵌套时间线（推理、内容、工具调用） */
       children?: SubTimelineItem[];
     }
+  | { type: "reasoning"; text: string; durationMs?: number }
   | { type: "content"; text: string };
 
 export interface PipelineState {
@@ -175,6 +176,80 @@ function appendToToolChildren(
   });
 }
 
+function appendReasoningToSubTimeline(
+  children: SubTimelineItem[],
+  reasoningContent: string
+): SubTimelineItem[] {
+  const last = children[children.length - 1];
+  if (last && last.type === "reasoning") {
+    return [
+      ...children.slice(0, -1),
+      { ...last, text: last.text + reasoningContent },
+    ];
+  }
+  return [
+    ...children,
+    {
+      type: "reasoning",
+      text: reasoningContent,
+    },
+  ];
+}
+
+function updateLastSubTimelineReasoningDuration(
+  children: SubTimelineItem[],
+  durationMs: number
+): SubTimelineItem[] {
+  for (let index = children.length - 1; index >= 0; index--) {
+    const item = children[index];
+    if (item.type === "reasoning") {
+      return children.map((child, childIndex) =>
+        childIndex === index && child.type === "reasoning"
+          ? { ...child, durationMs }
+          : child
+      );
+    }
+  }
+  return children;
+}
+
+function appendReasoningToTimeline(
+  timeline: TimelineItem[],
+  reasoningContent: string
+): TimelineItem[] {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "reasoning") {
+    return [
+      ...timeline.slice(0, -1),
+      { ...last, text: last.text + reasoningContent },
+    ];
+  }
+  return [
+    ...timeline,
+    {
+      type: "reasoning",
+      text: reasoningContent,
+    },
+  ];
+}
+
+function updateLastTimelineReasoningDuration(
+  timeline: TimelineItem[],
+  durationMs: number
+): TimelineItem[] {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const item = timeline[index];
+    if (item.type === "reasoning") {
+      return timeline.map((timelineItem, timelineIndex) =>
+        timelineIndex === index && timelineItem.type === "reasoning"
+          ? { ...timelineItem, durationMs }
+          : timelineItem
+      );
+    }
+  }
+  return timeline;
+}
+
 /** 处理 SSE 事件的通用逻辑（支持子 Agent 嵌套） */
 function createEventHandler(
   id: string,
@@ -216,25 +291,18 @@ function createEventHandler(
                   next.timeline = appendToToolChildren(
                     next.timeline,
                     event.parentToolCallId!,
-                    (children) => {
-                      const last = children[children.length - 1];
-                      if (last && last.type === "reasoning") {
-                        return [
-                          ...children.slice(0, -1),
-                          { ...last, text: last.text + event.reasoningContent },
-                        ];
-                      }
-                      return [
-                        ...children,
-                        {
-                          type: "reasoning" as const,
-                          text: event.reasoningContent!,
-                        },
-                      ];
-                    }
+                    (children) =>
+                      appendReasoningToSubTimeline(
+                        children,
+                        event.reasoningContent!
+                      )
                   );
                 } else {
                   next.reasoningText += event.reasoningContent;
+                  next.timeline = appendReasoningToTimeline(
+                    next.timeline,
+                    event.reasoningContent
+                  );
                 }
               }
               break;
@@ -242,6 +310,10 @@ function createEventHandler(
             case "CONTENT":
               if (event.reasoningDurationMs && !isSubAgent) {
                 next.reasoningDurationMs = event.reasoningDurationMs;
+                next.timeline = updateLastTimelineReasoningDuration(
+                  next.timeline,
+                  event.reasoningDurationMs
+                );
               }
               if (event.content) {
                 if (isSubAgent) {
@@ -251,19 +323,10 @@ function createEventHandler(
                     (children) => {
                       let updatedChildren = [...children];
                       if (event.reasoningDurationMs) {
-                        const lastReasoning = updatedChildren.findLast(
-                          (c) => c.type === "reasoning"
+                        updatedChildren = updateLastSubTimelineReasoningDuration(
+                          updatedChildren,
+                          event.reasoningDurationMs
                         );
-                        if (lastReasoning && lastReasoning.type === "reasoning") {
-                          updatedChildren = updatedChildren.map((c) =>
-                            c === lastReasoning
-                              ? {
-                                  ...c,
-                                  durationMs: event.reasoningDurationMs,
-                                }
-                              : c
-                          );
-                        }
                       }
 
                       const last =

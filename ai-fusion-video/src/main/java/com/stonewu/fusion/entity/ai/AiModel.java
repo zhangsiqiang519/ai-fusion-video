@@ -74,4 +74,11 @@ public class AiModel extends BaseEntity {
 
     /** 上下文窗口大小（token 数） */
     private Integer contextWindow;
+
+    /**
+     * 逻辑删除隔离标识。
+     * 0 表示未删除；逻辑删除后写入当前记录 ID，用于避免唯一索引被已删除数据占用。
+     */
+    @Builder.Default
+    private Long deletedId = 0L;
 }

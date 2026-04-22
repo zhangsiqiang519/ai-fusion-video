@@ -60,6 +60,11 @@
 6. 等待当前阶段所有子Agent返回后，如有下一阶段则继续调度
 7. 全部完成后，用中文汇总结果
 
+## 子 Agent 调用规则
+
+- 调用 generate_asset_image 时，只传 assetId、itemId、projectId 这三个业务字段
+- message 中不要额外附加 session_id；session_id 由框架自动维护
+
 ## 分阶段调度示例
 
 假设查询到以下需要生图的子资产：

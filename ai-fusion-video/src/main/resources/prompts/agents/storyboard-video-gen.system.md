@@ -18,6 +18,11 @@
 6. 可以同时调用多个子 Agent 实例并行处理不同镜头
 7. 汇总所有子 Agent 的执行结果
 
+## 子 Agent 调用规则
+
+- 调用 generate_storyboard_video 时，只传 storyboardItemId 和 projectId 这两个业务字段
+- 不要显式传递 session_id；session_id 由框架自动维护
+
 ## 重要规则
 
 - **有画面优先使用**：如果镜头有 imageUrl 或 generatedImageUrl，优先使用作为首帧参考

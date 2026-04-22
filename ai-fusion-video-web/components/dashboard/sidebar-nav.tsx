@@ -67,18 +67,35 @@ export function SidebarNav({ onNavigate, project: projectProp }: { onNavigate?: 
 
   const projectMatch = pathname.match(/^\/projects\/(\d+)/);
   const projectId = projectMatch ? Number(projectMatch[1]) : null;
-  const [projectLocal, setProjectLocal] = useState<Project | null>(null);
+  const [projectLocalState, setProjectLocalState] = useState<{
+    id: number;
+    project: Project;
+  } | null>(null);
 
   // 若外部已传入 project，则不在组件内自行请求
-  const project = projectProp !== undefined ? projectProp : projectLocal;
+  const project =
+    projectProp !== undefined
+      ? projectProp
+      : projectLocalState?.id === projectId
+        ? projectLocalState.project
+        : null;
 
   useEffect(() => {
     if (projectProp !== undefined) return; // 由外部管理，跳过
-    if (projectId) {
-      projectApi.get(projectId).then(setProjectLocal).catch(() => {});
-    } else {
-      setProjectLocal(null);
-    }
+    if (!projectId) return;
+
+    let cancelled = false;
+    projectApi.get(projectId)
+      .then((projectData) => {
+        if (!cancelled) {
+          setProjectLocalState({ id: projectId, project: projectData });
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, projectProp]);
 
   let items: SidebarItem[] = [];

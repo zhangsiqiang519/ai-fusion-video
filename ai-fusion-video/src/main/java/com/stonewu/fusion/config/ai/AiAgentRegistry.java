@@ -80,6 +80,7 @@ public class AiAgentRegistry {
                                                 "get_asset", "create_asset", "batch_create_assets", "update_asset",
                                                 "add_asset_item",
                                                 "get_storyboard", "insert_storyboard_item",
+                                                "get_generation_model_capabilities",
                                                 "generate_image",
                                                 "query_asset_metadata"))
                                 .systemPrompt(loadPrompt("ai-media.system.md"))
@@ -110,7 +111,7 @@ public class AiAgentRegistry {
                                                 AiAgentDefinition.SubAgentToolDef.builder()
                                                                 .toolName("episode_scene_writer")
                                                                 .displayName("分集场次编写器")
-                                                                .description("对指定分集内容进行场次拆解和编写。输入分集编号和内容摘要，子Agent会自动解析并保存场次数据。可同时调用多个实例并行处理不同分集。")
+                                                                .description("对指定分集内容进行场次拆解和编写。输入分集编号和内容摘要，子Agent会自动解析并保存场次数据。可同时调用多个实例并行处理不同分集。调用时只传声明中要求的业务参数，不要传 session_id，框架会自动维护会话。")
                                                                 .parametersSchema(
                                                                                 """
                                                                                                 {
@@ -121,6 +122,7 @@ public class AiAgentRegistry {
                                                                                                       "description": "分集记录ID（从 save_episode 的返回值中获取）"
                                                                                                     }
                                                                                                   },
+                                                                                                  "additionalProperties": false,
                                                                                                   "required": ["episodeId"]
                                                                                                 }""")
                                                                 .refAgentType("episode_scene_writer")
@@ -158,7 +160,7 @@ public class AiAgentRegistry {
                                                 AiAgentDefinition.SubAgentToolDef.builder()
                                                                 .toolName("episode_script_creator")
                                                                 .displayName("分集剧本创作器")
-                                                                .description("对指定分集进行对白和场次创作。输入分集编号，子Agent会自动查询大纲、设计场次、创作对白并保存。可同时调用多个实例并行处理不同分集。")
+                                                                .description("对指定分集进行对白和场次创作。输入分集编号，子Agent会自动查询大纲、设计场次、创作对白并保存。可同时调用多个实例并行处理不同分集。调用时只传声明中要求的业务参数，不要传 session_id，框架会自动维护会话。")
                                                                 .parametersSchema(
                                                                                 """
                                                                                                 {
@@ -169,6 +171,7 @@ public class AiAgentRegistry {
                                                                                                       "description": "分集记录ID（从 save_episode 的返回值中获取）"
                                                                                                     }
                                                                                                   },
+                                                                                                  "additionalProperties": false,
                                                                                                   "required": ["episodeId"]
                                                                                                 }""")
                                                                 .refAgentType("episode_script_creator")
@@ -246,7 +249,7 @@ public class AiAgentRegistry {
                                                 AiAgentDefinition.SubAgentToolDef.builder()
                                                                 .toolName("storyboard_asset_preprocessor")
                                                                 .displayName("子资产预处理器")
-                                                                .description("分析所有分集剧本内容，识别角色/场景/道具的外观变化，统一创建所需的子资产变体并保存到数据库。此工具必须在 episode_storyboard_writer 之前调用，且只调用一次。")
+                                                                .description("分析所有分集剧本内容，识别角色/场景/道具的外观变化，统一创建所需的子资产变体并保存到数据库。此工具必须在 episode_storyboard_writer 之前调用，且只调用一次。调用时只传声明中要求的业务参数，不要传 session_id，框架会自动维护会话。")
                                                                 .parametersSchema(
                                                                                 """
                                                                                                 {
@@ -257,6 +260,7 @@ public class AiAgentRegistry {
                                                                                                       "description": "所有需要处理的分集ID列表，逗号分隔，如 '1,2,3'"
                                                                                                     }
                                                                                                   },
+                                                                                                  "additionalProperties": false,
                                                                                                   "required": ["episodeIds"]
                                                                                                 }""")
                                                                 .refAgentType("storyboard_asset_preprocessor")
@@ -278,7 +282,7 @@ public class AiAgentRegistry {
                                                 AiAgentDefinition.SubAgentToolDef.builder()
                                                                 .toolName("episode_storyboard_writer")
                                                                 .displayName("分集分镜编写器")
-                                                                .description("对指定分集进行分镜转换。输入分集编号，子Agent会自动查询场次内容、获取最新资产列表（含预处理器已创建的子资产）、设计镜头并保存分镜数据。可同时调用多个实例并行处理不同分集。")
+                                                                .description("对指定分集进行分镜转换。输入分集编号，子Agent会自动查询场次内容、获取最新资产列表（含预处理器已创建的子资产）、设计镜头并保存分镜数据。可同时调用多个实例并行处理不同分集。调用时只传声明中要求的业务参数，不要传 session_id，框架会自动维护会话。")
                                                                 .parametersSchema(
                                                                                 """
                                                                                                 {
@@ -289,6 +293,7 @@ public class AiAgentRegistry {
                                                                                                       "description": "剧本分集记录ID（从 get_script_structure 获取）"
                                                                                                     }
                                                                                                   },
+                                                                                                  "additionalProperties": false,
                                                                                                   "required": ["episodeId"]
                                                                                                 }""")
                                                                 .refAgentType("episode_storyboard_writer")
@@ -437,6 +442,7 @@ public class AiAgentRegistry {
                                                                                 - assetId: 主资产ID（数字，必传）
                                                                                 - itemId: 子资产ID（数字，必传）
                                                                                 - projectId: 项目ID（数字，必传）
+                                                                                - 不要额外传 session_id，框架会自动维护会话
 
                                                                                 message 格式示例：
                                                                                 请为子资产生成图片。
@@ -465,7 +471,7 @@ public class AiAgentRegistry {
                                 .type("asset_image_executor")
                                 .name("资产图片生成执行器")
                                 .toolNames(List.of(
-                                                "get_project", "query_asset_items", "generate_image",
+                                                "get_project", "query_asset_items", "get_generation_model_capabilities", "generate_image",
                                                 "update_asset_image"))
                                 .systemPrompt(loadPrompt("asset-image-executor.system.md"))
                                 .instructionTemplate("")
@@ -494,6 +500,7 @@ public class AiAgentRegistry {
                                                                                 调用时 message 必须包含以下信息（每行一个键值对）：
                                                                                 - storyboardItemId: 分镜条目ID（数字，必传）
                                                                                 - projectId: 项目ID（数字，必传）
+                                                                                - 不要额外传 session_id，框架会自动维护会话
 
                                                                                 message 格式示例：
                                                                                 请为分镜镜头生成视频。
@@ -523,7 +530,7 @@ public class AiAgentRegistry {
                                 .name("分镜视频生成执行器")
                                 .toolNames(List.of(
                                                 "get_project", "get_storyboard_scene_items",
-                                                "generate_video", "update_storyboard_item_video"))
+                                                "get_generation_model_capabilities", "generate_video", "update_storyboard_item_video"))
                                 .systemPrompt(loadPrompt("storyboard-video-executor.system.md"))
                                 .instructionTemplate("")
                                 .enableTools(1)

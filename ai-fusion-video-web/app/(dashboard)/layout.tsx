@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useSyncExternalStore } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X } from "lucide-react";
@@ -19,9 +19,26 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
-  const [mounted, setMounted] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const authHydrated = useSyncExternalStore(
+    (onStoreChange) => {
+      const unsubStart = useAuthStore.persist.onHydrate(onStoreChange);
+      const unsubFinish = useAuthStore.persist.onFinishHydration(onStoreChange);
+      return () => {
+        unsubStart();
+        unsubFinish();
+      };
+    },
+    () => useAuthStore.persist.hasHydrated(),
+    () => false
+  );
+  const [sidebarRoute, setSidebarRoute] = useState<string | null>(null);
+  const [projectState, setProjectState] = useState<{ id: number; project: Project } | null>(null);
+  const sidebarOpen = sidebarRoute === pathname;
+  const currentProjectId = useMemo(() => {
+    const match = pathname.match(/^\/projects\/(\d+)/);
+    return match ? Number(match[1]) : null;
+  }, [pathname]);
+  const currentProject = projectState?.id === currentProjectId ? projectState.project : null;
 
   // 布局宽度控制：子页面通过 useFullWidth(condition) 驱动
   const { fullWidth, setFullWidth } = useLayoutState();
@@ -30,34 +47,34 @@ export default function DashboardLayout({
     [fullWidth, setFullWidth]
   );
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [pathname]);
-
   // 在 layout 层统一请求 project 数据，供桌面/移动端 SidebarNav 共享
   useEffect(() => {
-    const match = pathname.match(/^\/projects\/(\d+)/);
-    if (match) {
-      const id = Number(match[1]);
-      projectApi.get(id).then(setCurrentProject).catch(() => {});
-    } else {
-      setCurrentProject(null);
+    if (currentProjectId === null) {
+      return;
     }
-  }, [pathname]);
+    let cancelled = false;
+    projectApi.get(currentProjectId)
+      .then((project) => {
+        if (!cancelled) {
+          setProjectState({ id: currentProjectId, project });
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProjectId]);
 
   // 运行时登出检测：用户主动登出后跳转到登录页
   // 初始进入时的认证保护由 middleware 处理
   useEffect(() => {
-    if (mounted && !isAuthenticated) {
+    if (authHydrated && !isAuthenticated) {
       router.replace("/login");
     }
-  }, [mounted, isAuthenticated, router]);
+  }, [authHydrated, isAuthenticated, router]);
 
-  const ready = mounted && isAuthenticated;
+  const ready = authHydrated && isAuthenticated;
 
   return (
     <LayoutContext value={layoutCtx}>
@@ -96,7 +113,7 @@ export default function DashboardLayout({
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.2 }}
                   className="fixed inset-0 z-40 bg-white/40 backdrop-blur-sm lg:hidden"
-                  onClick={() => setSidebarOpen(false)}
+                  onClick={() => setSidebarRoute(null)}
                 />
                 <motion.div
                   initial={{ opacity: 0, x: -20 }}
@@ -105,7 +122,7 @@ export default function DashboardLayout({
                   transition={{ duration: 0.2, ease: "easeOut" }}
                   className="fixed left-4 top-22 z-50 lg:hidden w-[60vw] min-w-[200px] max-w-[300px]"
                 >
-                  <SidebarNav project={currentProject} onNavigate={() => setSidebarOpen(false)} />
+                  <SidebarNav project={currentProject} onNavigate={() => setSidebarRoute(null)} />
                 </motion.div>
               </>
             )}
@@ -114,7 +131,7 @@ export default function DashboardLayout({
           {/* 移动端菜单按钮 */}
           {ready && (
             <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
+              onClick={() => setSidebarRoute(sidebarOpen ? null : pathname)}
               className={cn(
                 "fixed left-3 bottom-4 z-60 lg:hidden",
                 "h-11 w-11 rounded-full flex items-center justify-center",

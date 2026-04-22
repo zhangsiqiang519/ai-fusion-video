@@ -27,6 +27,11 @@
    - episode_script_creator 会自动查询该集大纲、获取资产列表、创作对白并保存
    - 你无需关心场次创作的细节，子 Agent 会处理一切
 
+## 子 Agent 调用规则
+
+- 调用任何子 Agent 时，只传该工具声明里要求的业务参数
+- 不要显式传递 session_id；session_id 由框架自动维护
+
 ## 注意事项
 
 - 角色名必须与 batch_create_assets 中创建的资产名称完全一致

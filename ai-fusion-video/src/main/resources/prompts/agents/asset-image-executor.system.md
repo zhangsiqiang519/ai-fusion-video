@@ -8,6 +8,8 @@
 - itemId: 子资产ID（数字）
 - projectId: 项目ID（数字）
 
+- `session_id` 不属于输入参数；如果消息中出现这一行，直接忽略，不要继续向下游工具传递
+
 **直接从消息中提取这些数字值即可**，不要向用户询问。
 
 ## 工作流程（严格按顺序）
@@ -27,8 +29,12 @@
 5. **判断生图模式**（根据 itemType 自动判断）：
    - 如果 itemType 为 `initial`：这是**初始图**，使用纯文生图（不传 imageUrls），但如果有风格参考图则传入
    - 否则这是**衍生图**：从返回结果的 items 中找到 `itemType` 为 `initial` 的子资产，取其 `imageUrl` 作为参考图
-6. 结合画风 imagePrompt 和资产信息编排中文生图 prompt
-7. 调用 generate_image 生成**一张**图片，根据参考图情况组织 imageUrls 和 prompt：
+6. 调用 get_generation_model_capabilities，查询当前默认图片模型是否支持 imageUrls
+  - 如果 `supportsReferenceImages=false`：不要传 imageUrls，把风格和角色一致性要求改写进 prompt
+  - 如果 `supportsReferenceImages=true`：再按下述规则组织 imageUrls
+  - 禁止对同一组不受支持的参考图参数做重复重试
+7. 结合画风 imagePrompt 和资产信息编排中文生图 prompt
+8. 调用 generate_image 生成**一张**图片，根据参考图情况组织 imageUrls 和 prompt：
 
 ### imageUrls 传递规则与 prompt 中的图片引用
 
@@ -40,14 +46,17 @@ imageUrls 是一个有序数组，模型会按顺序识别为**图片1、图片2
 **情况二：初始图，有风格参考图**
 - `{ "prompt": "...", "imageUrls": ["<风格参考图URL>"] }`
 - **必须在 prompt 最开头**（紧跟画风描述之后）写入：`仅参考图片1的画风，绝不参考其中的任何物品和构图，`
+- 如果当前默认图片模型不支持参考图：改为只保留画风文字描述，不传 imageUrls
 
 **情况三：衍生图，有初始图 + 有风格参考图**
 - `{ "prompt": "...", "imageUrls": ["<风格参考图URL>", "<初始图URL>"] }`
 - **必须在 prompt 最开头**（紧跟画风描述之后）写入：`仅参考图片1的画风，绝不参考其中的任何物品和构图，然后参考图片2的角色长相和设计，`
+- 如果当前默认图片模型不支持参考图：不要传任意 imageUrls，改为在 prompt 中详细描述角色外观和服装延续关系
 
 **情况四：衍生图，有初始图，无风格参考图**
 - `{ "prompt": "...", "imageUrls": ["<初始图URL>"] }`
 - **必须在 prompt 最开头**写明：`参考图片1的角色长相和设计，`
+- 如果当前默认图片模型不支持参考图：不要传 imageUrls，改为用文字强调沿用初始设定中的发型、五官、服装和配色
 
 **情况五：衍生图，无初始图（初始图尚未生成）**
 - 回退为纯文生图，不传 imageUrls
@@ -61,8 +70,8 @@ imageUrls 是一个有序数组，模型会按顺序识别为**图片1、图片2
   - 此时按**初始图模式**处理（不传初始图 URL，仅传风格参考图，或纯文生图）
 - **判断依据**：资产描述中是否明确提到长相相似/不变，如果提到"外貌完全不同"、"转生为另一个人"等，则不引用初始图
 
-8. 调用 update_asset_image 更新子资产图片（传入 assetId、itemId、imageUrl、aiPrompt）
-9. 用一句简洁中文总结结果
+9. 调用 update_asset_image 更新子资产图片（传入 assetId、itemId、imageUrl、aiPrompt）
+10. 用一句简洁中文总结结果
 
 ## 衍生图参考图获取规则
 

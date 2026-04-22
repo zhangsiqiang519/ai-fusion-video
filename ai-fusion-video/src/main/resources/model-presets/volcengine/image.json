@@ -7,6 +7,9 @@
     "description": "火山引擎 Seedream 3.0 文生图模型，支持 1K~4K 分辨率",
     "capabilities": ["文生图"],
     "config": {
+      "supportReferenceImages": false,
+      "minReferenceImages": 0,
+      "maxReferenceImages": 0,
       "defaultWidth": 2048,
       "defaultHeight": 2048,
       "minPixels": 921600,
@@ -53,6 +56,8 @@
     "description": "火山引擎 Seedream 4.0 文生图模型，支持 1K~4K 分辨率",
     "capabilities": ["文生图", "图生图", "生成组图"],
     "config": {
+      "supportReferenceImages": true,
+      "minReferenceImages": 0,
       "defaultWidth": 2048,
       "defaultHeight": 2048,
       "minPixels": 921600,
@@ -99,6 +104,8 @@
     "description": "火山引擎 Seedream 4.5 文生图模型，支持 2K~4K 分辨率",
     "capabilities": ["文生图", "图生图", "生成组图"],
     "config": {
+      "supportReferenceImages": true,
+      "minReferenceImages": 0,
       "defaultWidth": 2048,
       "defaultHeight": 2048,
       "minPixels": 3686400,
@@ -135,6 +142,8 @@
     "description": "火山引擎 Seedream 5.0 文生图模型，支持 2K~3K 分辨率，全能力",
     "capabilities": ["文生图", "图生图", "生成组图"],
     "config": {
+      "supportReferenceImages": true,
+      "minReferenceImages": 0,
       "defaultWidth": 2048,
       "defaultHeight": 2048,
       "minPixels": 3686400,
@@ -171,6 +180,8 @@
     "description": "火山引擎 Seedream 5.0 Lite 文生图模型，支持 2K~3K 分辨率",
     "capabilities": ["文生图", "图生图", "生成组图"],
     "config": {
+      "supportReferenceImages": true,
+      "minReferenceImages": 0,
       "defaultWidth": 2048,
       "defaultHeight": 2048,
       "minPixels": 3686400,

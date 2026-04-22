@@ -6,6 +6,9 @@
     "modelType": 2,
     "description": "OpenAI DALL·E 3 文生图模型",
     "config": {
+      "supportReferenceImages": false,
+      "minReferenceImages": 0,
+      "maxReferenceImages": 0,
       "defaultWidth": 1024,
       "defaultHeight": 1024,
       "supportedSizes": {
@@ -24,6 +27,9 @@
     "modelType": 2,
     "description": "OpenAI GPT Image 1 文生图模型",
     "config": {
+      "supportReferenceImages": false,
+      "minReferenceImages": 0,
+      "maxReferenceImages": 0,
       "defaultWidth": 1024,
       "defaultHeight": 1024,
       "supportedSizes": {

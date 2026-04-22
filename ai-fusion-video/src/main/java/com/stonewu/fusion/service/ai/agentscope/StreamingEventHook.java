@@ -81,6 +81,13 @@ public class StreamingEventHook implements Hook {
      */
     private final ConcurrentHashMap<String, String> activeSubAgentCalls = new ConcurrentHashMap<>();
 
+    /**
+     * 当前会话中已登记的活跃 Agent 实例。
+     * <p>
+     * 用于在用户取消时，对主 Agent 和所有已创建的子 Agent 调用官方 interrupt()。
+     */
+    private final ConcurrentHashMap<String, Agent> activeAgents = new ConcurrentHashMap<>();
+
     public StreamingEventHook(Sinks.Many<AiChatStreamRespVO> eventSink,
             String conversationId,
             String messageId,
@@ -95,6 +102,8 @@ public class StreamingEventHook implements Hook {
 
     @Override
     public <T extends HookEvent> Mono<T> onEvent(T event) {
+        registerActiveAgent(event.getAgent());
+
         // 每个事件触发时检查取消标志，尽早中断 Agent 的 ReAct 循环
         if (cancellationToken.isCancelled()) {
             log.info("[StreamingEventHook] 检测到取消标志，中断 Agent 执行: event={}",
@@ -140,24 +149,19 @@ public class StreamingEventHook implements Hook {
 
         Msg incrementalChunk = event.getIncrementalChunk();
         if (incrementalChunk == null) {
+            // log.debug("[StreamingEventHook] 收到event: {}, agent={}, parentCallId={}, chunk=null",
+            //         event.getClass().getSimpleName(), agentName, parentCallId);
             return;
         }
+
+        // log.debug("[StreamingEventHook] 收到event: {}, agent={}, parentCallId={}, textContent={}",
+        //          event.getClass().getSimpleName(), agentName, parentCallId, incrementalChunk.getTextContent());
 
         for (ContentBlock block : incrementalChunk.getContent()) {
             if (block instanceof ThinkingBlock thinkingBlock) {
                 String thinkingText = thinkingBlock.getThinking();
                 if (thinkingText != null && !thinkingText.isEmpty()) {
-                    reasoningStartTimes.putIfAbsent(agentKey, System.currentTimeMillis());
-
-                    emitEvent(new AiChatStreamRespVO()
-                            .setMessageId(messageId)
-                            .setConversationId(conversationId)
-                            .setOutputType("REASONING")
-                            .setReasoningContent(thinkingText)
-                            .setReasoningStartTime(reasoningStartTimes.get(agentKey))
-                            .setParentToolCallId(parentCallId)
-                            .setAgentName(isSubAgent(agentName) ? agentName : null)
-                            .setFinished(false));
+                    emitReasoningEvent(agentName, agentKey, parentCallId, thinkingText, "ThinkingBlock");
                 }
             } else if (block instanceof TextBlock textBlock) {
                 String text = textBlock.getText();
@@ -191,7 +195,11 @@ public class StreamingEventHook implements Hook {
      * 推理完成：LLM 生成结束，清理当前轮的状态
      */
     private void handlePostReasoning(PostReasoningEvent event) {
+        String agentName = event.getAgent().getName();
         String agentKey = getAgentKey(event);
+        String parentCallId = resolveParentCallId(event);
+
+        emitReasoningDurationIfNeeded(agentName, agentKey, parentCallId);
         reasoningStartTimes.remove(agentKey);
         reasoningDurations.remove(agentKey);
     }
@@ -277,6 +285,8 @@ public class StreamingEventHook implements Hook {
         String agentName = event.getAgent().getName();
         String agentKey = getAgentKey(event);
 
+        activeAgents.remove(agentKey);
+
         if (isMainAgent(agentName)) {
             Msg finalMsg = event.getFinalMessage();
             if (finalMsg != null) {
@@ -298,6 +308,7 @@ public class StreamingEventHook implements Hook {
      */
     private void handleError(ErrorEvent event) {
         String agentName = event.getAgent().getName();
+        activeAgents.remove(getAgentKey(event));
         String errorMsg = event.getError() != null ? event.getError().getMessage() : "未知错误";
         log.error("[StreamingEventHook] Agent 错误: agent={}, error={}", agentName, errorMsg);
 
@@ -323,11 +334,47 @@ public class StreamingEventHook implements Hook {
         log.debug("[StreamingEventHook] 注册子Agent工具名: {}", toolName);
     }
 
+    /**
+     * 登记当前执行中的 Agent 实例。
+     */
+    public void registerActiveAgent(Agent agent) {
+        if (agent == null) {
+            return;
+        }
+        activeAgents.put(getAgentKey(agent), agent);
+    }
+
+    /**
+     * 对当前会话中所有已登记的 Agent 实例发送官方 interrupt 信号。
+     */
+    public void interruptTrackedAgents() {
+        activeAgents.forEach((agentKey, agent) -> {
+            try {
+                agent.interrupt();
+                log.info("[StreamingEventHook] 已发送 interrupt 信号: agentKey={}, agentName={}",
+                        agentKey, agent.getName());
+            } catch (Exception e) {
+                log.warn("[StreamingEventHook] 发送 interrupt 信号失败: agentKey={}, agentName={}",
+                        agentKey, agent.getName(), e);
+            }
+        });
+    }
+
+    /**
+     * 清空当前会话中登记的 Agent 实例。
+     */
+    public void clearTrackedAgents() {
+        activeAgents.clear();
+    }
+
     // ========== 内部方法 ==========
 
-    private String getAgentKey(HookEvent event) {
-        Agent agent = event.getAgent();
+    private String getAgentKey(Agent agent) {
         return agent.getName() + ":" + System.identityHashCode(agent);
+    }
+
+    private String getAgentKey(HookEvent event) {
+        return getAgentKey(event.getAgent());
     }
 
     private boolean isMainAgent(String agentName) {
@@ -385,6 +432,42 @@ public class StreamingEventHook implements Hook {
                     event.getContent() != null ? event.getContent().substring(0, Math.min(event.getContent().length(), 100)) : null,
                     Thread.currentThread().getName());
         }
+    }
+
+    private void emitReasoningEvent(String agentName, String agentKey, String parentCallId,
+            String reasoningText, String sourceType) {
+        reasoningStartTimes.putIfAbsent(agentKey, System.currentTimeMillis());
+        log.debug("[StreamingEventHook] 思考增量: agent={}, parentCallId={}, sourceType={}, content={}",
+                agentName, parentCallId, sourceType, reasoningText);
+
+        emitEvent(new AiChatStreamRespVO()
+                .setMessageId(messageId)
+                .setConversationId(conversationId)
+                .setOutputType("REASONING")
+                .setReasoningContent(reasoningText)
+                .setReasoningStartTime(reasoningStartTimes.get(agentKey))
+                .setParentToolCallId(parentCallId)
+                .setAgentName(isSubAgent(agentName) ? agentName : null)
+                .setFinished(false));
+    }
+
+    private void emitReasoningDurationIfNeeded(String agentName, String agentKey, String parentCallId) {
+        Long startTime = reasoningStartTimes.get(agentKey);
+        if (startTime == null || reasoningDurations.containsKey(agentKey)) {
+            return;
+        }
+
+        Long durationMs = System.currentTimeMillis() - startTime;
+        reasoningDurations.put(agentKey, durationMs);
+
+        emitEvent(new AiChatStreamRespVO()
+                .setMessageId(messageId)
+                .setConversationId(conversationId)
+                .setOutputType("CONTENT")
+                .setReasoningDurationMs(durationMs)
+                .setParentToolCallId(parentCallId)
+                .setAgentName(isSubAgent(agentName) ? agentName : null)
+                .setFinished(false));
     }
 
     /**

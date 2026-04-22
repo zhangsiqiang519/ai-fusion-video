@@ -1,6 +1,7 @@
 package com.stonewu.fusion.service.generation.strategy.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.stonewu.fusion.common.BusinessException;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.images.Image;
@@ -42,6 +43,10 @@ public class OpenAiImageStrategy implements ImageGenerationStrategy {
     @Override
     public List<String> generate(String prompt, String modelCode, int width, int height, int count,
                                   List<String> imageUrls, ApiConfig apiConfig) {
+        if (imageUrls != null && !imageUrls.isEmpty()) {
+            throw new BusinessException("当前图片模型 " + modelCode + " 使用的是 OpenAI 文生图接口，不支持参考图输入");
+        }
+
         OpenAIOkHttpClient.Builder builder = OpenAIOkHttpClient.builder().apiKey(apiConfig.getApiKey());
         if (StrUtil.isNotBlank(apiConfig.getApiUrl())) {
             builder.baseUrl(apiConfig.getApiUrl());

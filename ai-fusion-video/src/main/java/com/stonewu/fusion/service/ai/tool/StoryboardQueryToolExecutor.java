@@ -74,6 +74,7 @@ public class StoryboardQueryToolExecutor implements ToolExecutor {
                 itemList.add(JSONUtil.createObj()
                         .set("id", item.getId())
                         .set("shotNumber", item.getShotNumber())
+                        .set("autoShotNumber", item.getAutoShotNumber())
                         .set("shotType", item.getShotType())
                         .set("content", item.getContent())
                         .set("sceneExpectation", item.getSceneExpectation())
@@ -84,7 +85,10 @@ public class StoryboardQueryToolExecutor implements ToolExecutor {
                         .set("cameraAngle", item.getCameraAngle())
                         .set("transition", item.getTransition())
                         .set("imageUrl", item.getImageUrl())
-                        .set("videoUrl", item.getVideoUrl()));
+                        .set("generatedImageUrl", item.getGeneratedImageUrl())
+                        .set("videoUrl", item.getVideoUrl())
+                        .set("generatedVideoUrl", item.getGeneratedVideoUrl())
+                        .set("videoPrompt", item.getVideoPrompt()));
             }
 
             return JSONUtil.createObj()

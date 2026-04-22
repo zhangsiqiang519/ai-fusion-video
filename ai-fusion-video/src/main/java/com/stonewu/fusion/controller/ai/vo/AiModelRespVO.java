@@ -16,7 +16,12 @@ public class AiModelRespVO {
     private Integer sort;
     private Integer status;
     private String config;
+    private Integer maxConcurrency;
     private Boolean defaultModel;
+    private Boolean supportVision;
+    private Boolean supportReasoning;
+    private Integer contextWindow;
     private Long apiConfigId;
     private LocalDateTime createTime;
+    private LocalDateTime updateTime;
 }

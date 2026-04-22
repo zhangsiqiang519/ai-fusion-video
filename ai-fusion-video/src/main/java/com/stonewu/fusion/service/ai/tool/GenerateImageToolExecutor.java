@@ -9,6 +9,7 @@ import com.stonewu.fusion.entity.generation.ImageTask;
 import com.stonewu.fusion.service.ai.AiModelService;
 import com.stonewu.fusion.service.ai.ToolExecutionContext;
 import com.stonewu.fusion.service.ai.ToolExecutor;
+import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import com.stonewu.fusion.service.generation.ImageGenerationService;
 import com.stonewu.fusion.service.generation.consumer.ImageGenerationConsumer;
 import lombok.RequiredArgsConstructor;
@@ -33,12 +34,13 @@ public class GenerateImageToolExecutor implements ToolExecutor {
     /** 模型类型常量：图片生成 */
     private static final int MODEL_TYPE_IMAGE = 2;
 
-    /** 同步等待超时时间（5 分钟） */
-    private static final long WAIT_TIMEOUT_MS = 5 * 60 * 1000L;
+    /** 同步等待超时时间（30 分钟） */
+    private static final long WAIT_TIMEOUT_MS = 30 * 60 * 1000L;
 
     private final AiModelService aiModelService;
     private final ImageGenerationService imageGenerationService;
     private final ImageGenerationConsumer imageGenerationConsumer;
+    private final GenerationModelCapabilityService generationModelCapabilityService;
 
     @Override
     public String getToolName() {
@@ -64,29 +66,46 @@ public class GenerateImageToolExecutor implements ToolExecutor {
                 - 生成完成后，如需将图片保存到角色/场景/道具等资产中，请使用 update_asset_image 工具
                 - 提示词要详细具体，包含画面的主体、风格、视角等信息
                 - 可以使用中文提示词，系统会自动处理
-                """;
+                - 如果你打算传 imageUrls，或不确定当前默认模型是否支持参考图，请先调用 get_generation_model_capabilities
+                
+                %s
+                """.formatted(describeCurrentModelCapability());
     }
 
     @Override
     public String getParametersSchema() {
-        return """
-                {
-                    "type": "object",
-                    "properties": {
-                        "prompt": { "type": "string", "description": "图片生成提示词（英文效果更佳）" },
-                        "negativePrompt": { "type": "string", "description": "反向提示词，描述不希望出现的内容" },
-                        "width": { "type": "number", "description": "图片宽度（默认使用模型配置中的默认宽度）" },
-                        "height": { "type": "number", "description": "图片高度（默认使用模型配置中的默认高度）" },
-                        "style": { "type": "string", "description": "风格（如 realistic, anime, watercolor 等）" },
-                        "imageUrls": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "参考图片 URL 列表（用于图生图，文生图时不传）"
-                        }
-                    },
-                    "required": ["prompt"]
-                }
-                """;
+            AiModel model = resolvePreferredModelOrNull();
+            GenerationModelCapabilityService.ImageModelCapability capability = model != null
+                ? generationModelCapabilityService.resolveImageCapability(model)
+                : null;
+            String imageUrlDescription = capability != null && !capability.supportsReferenceImages()
+                ? "当前默认模型不支持参考图，请不要传该字段"
+                : "参考图片 URL 列表（用于图生图，文生图时不传）";
+
+            return JSONUtil.createObj()
+                .set("type", "object")
+                .set("properties", JSONUtil.createObj()
+                    .set("prompt", JSONUtil.createObj()
+                        .set("type", "string")
+                        .set("description", "图片生成提示词（英文效果更佳）"))
+                    .set("negativePrompt", JSONUtil.createObj()
+                        .set("type", "string")
+                        .set("description", "反向提示词，描述不希望出现的内容"))
+                    .set("width", JSONUtil.createObj()
+                        .set("type", "number")
+                        .set("description", "图片宽度（默认使用模型配置中的默认宽度）"))
+                    .set("height", JSONUtil.createObj()
+                        .set("type", "number")
+                        .set("description", "图片高度（默认使用模型配置中的默认高度）"))
+                    .set("style", JSONUtil.createObj()
+                        .set("type", "string")
+                        .set("description", "风格（如 realistic, anime, watercolor 等）"))
+                    .set("imageUrls", JSONUtil.createObj()
+                        .set("type", "array")
+                        .set("items", JSONUtil.createObj().set("type", "string"))
+                        .set("description", imageUrlDescription)))
+                .set("required", JSONUtil.parseArray("[\"prompt\"]"))
+                .toString();
     }
 
     @Override
@@ -115,8 +134,7 @@ public class GenerateImageToolExecutor implements ToolExecutor {
                 }
             }
 
-            // 获取默认图片生成模型的 ID（供 Consumer 处理时使用）
-            Long modelId = resolveDefaultModelId();
+                AiModel model = resolvePreferredModel();
 
             // 构建生图任务
             ImageTask task = ImageTask.builder()
@@ -124,13 +142,15 @@ public class GenerateImageToolExecutor implements ToolExecutor {
                     .width(width > 0 ? width : null)
                     .height(height > 0 ? height : null)
                     .refImageUrls(refImageUrls)
-                    .modelId(modelId)
+                    .modelId(model.getId())
                     .count(1)
                     .userId(context.getUserId())
                     .build();
 
-            log.info("[generate_image] 提交生图任务: prompt={}, size={}x{}, modelId={}, 参考图: {}",
-                    prompt, width, height, modelId, refImageUrls != null ? "有" : "无");
+                generationModelCapabilityService.validateImageTask(model, task);
+
+                log.info("[generate_image] 提交生图任务: prompt={}, size={}x{}, modelId={}, modelCode={}, 参考图: {}",
+                    prompt, width, height, model.getId(), model.getCode(), refImageUrls != null ? "有" : "无");
 
             // 提交到队列并同步等待结果
             ImageTask completed = imageGenerationConsumer.submitAndWait(task, WAIT_TIMEOUT_MS);
@@ -167,16 +187,29 @@ public class GenerateImageToolExecutor implements ToolExecutor {
     /**
      * 获取默认图片生成模型的 ID
      */
-    private Long resolveDefaultModelId() {
+    private AiModel resolvePreferredModel() {
         AiModel defaultModel = aiModelService.getDefaultByType(MODEL_TYPE_IMAGE);
         if (defaultModel != null) {
-            return defaultModel.getId();
+            return defaultModel;
         }
         List<AiModel> imageModels = aiModelService.getListByType(MODEL_TYPE_IMAGE);
         if (!imageModels.isEmpty()) {
-            return imageModels.get(0).getId();
+            return imageModels.get(0);
         }
-        return null;
+        throw new IllegalStateException("未配置可用的图片生成模型");
+    }
+
+    private AiModel resolvePreferredModelOrNull() {
+        try {
+            return resolvePreferredModel();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String describeCurrentModelCapability() {
+        AiModel model = resolvePreferredModelOrNull();
+        return generationModelCapabilityService.describeImageCapability(model);
     }
 
     private String errorResult(String message) {

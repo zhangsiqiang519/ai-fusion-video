@@ -2,6 +2,7 @@ package com.stonewu.fusion.service.generation.consumer;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
+import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.entity.generation.VideoItem;
@@ -9,16 +10,22 @@ import com.stonewu.fusion.entity.generation.VideoTask;
 import com.stonewu.fusion.infrastructure.queue.RedisTaskQueue;
 import com.stonewu.fusion.service.ai.AiModelService;
 import com.stonewu.fusion.service.ai.ApiConfigService;
+import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import com.stonewu.fusion.service.generation.VideoGenerationService;
 import com.stonewu.fusion.service.generation.strategy.VideoGenerationStrategy;
 import com.stonewu.fusion.service.storage.MediaStorageService;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -29,14 +36,24 @@ import java.util.stream.Collectors;
 @Slf4j
 public class VideoGenerationConsumer {
 
-    private static final String QUEUE_NAME = "video_generation";
+    private static final String BASE_QUEUE_NAME = "video_generation";
+    private static final String MODEL_QUEUE_PREFIX = BASE_QUEUE_NAME + ":model:";
+    private static final int MODEL_TYPE_VIDEO = 3;
 
     private final RedisTaskQueue taskQueue;
     private final VideoGenerationService videoGenerationService;
     private final AiModelService aiModelService;
     private final ApiConfigService apiConfigService;
+    private final GenerationModelCapabilityService generationModelCapabilityService;
     private final List<VideoGenerationStrategy> strategies;
     private final MediaStorageService mediaStorageService;
+
+    private final AtomicInteger workerThreadCounter = new AtomicInteger(1);
+    private final ExecutorService workerExecutor = Executors.newCachedThreadPool(r -> {
+        Thread thread = new Thread(r, "video-generation-worker-" + workerThreadCounter.getAndIncrement());
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private Map<String, VideoGenerationStrategy> strategyMap;
 
@@ -52,10 +69,19 @@ public class VideoGenerationConsumer {
      * 提交生视频任务到队列
      */
     public String submitTask(VideoTask task) {
+        AiModel queueModel = resolveQueueModel(task.getModelId());
+        if (queueModel == null) {
+            throw new BusinessException("没有可用的视频生成模型");
+        }
+        task.setModelId(queueModel.getId());
+
+        String queueName = resolveQueueName(task.getModelId());
         String taskId = IdUtil.fastSimpleUUID();
         task.setTaskId(taskId);
         task.setStatus(0);
         videoGenerationService.create(task);
+
+        refreshQueueMaxConcurrent(queueName, task.getModelId());
 
         for (int i = 0; i < task.getCount(); i++) {
             VideoItem item = VideoItem.builder()
@@ -65,8 +91,8 @@ public class VideoGenerationConsumer {
             videoGenerationService.createItem(item);
         }
 
-        taskQueue.push(QUEUE_NAME, taskId);
-        log.info("[VideoConsumer] 任务入队: taskId={}", taskId);
+        taskQueue.push(queueName, taskId);
+        log.info("[VideoConsumer] 任务入队: taskId={}, queue={}, modelId={}", taskId, queueName, task.getModelId());
         return taskId;
     }
 
@@ -114,23 +140,36 @@ public class VideoGenerationConsumer {
 
     @Scheduled(fixedDelay = 5000)
     public void consume() {
-        String taskId = taskQueue.acquireAndPop(QUEUE_NAME, 1);
-        if (taskId == null) {
-            return;
-        }
-
-        try {
-            taskQueue.markRunning(QUEUE_NAME, taskId, 60);
-            processTask(taskId);
-        } catch (Exception e) {
-            log.error("[VideoConsumer] 任务处理失败: taskId={}", taskId, e);
-        } finally {
-            taskQueue.markComplete(QUEUE_NAME, taskId);
-            taskQueue.release(QUEUE_NAME);
+        for (String queueName : collectQueueNamesToConsume()) {
+            drainQueue(queueName);
         }
     }
 
-    private void processTask(String taskId) {
+    private void drainQueue(String queueName) {
+        while (true) {
+            String taskId = taskQueue.acquireAndPop(queueName, 1);
+            if (taskId == null) {
+                return;
+            }
+            dispatchTask(queueName, taskId);
+        }
+    }
+
+    private void dispatchTask(String queueName, String taskId) {
+        workerExecutor.execute(() -> {
+            try {
+                taskQueue.markRunning(queueName, taskId, 60);
+                processTask(queueName, taskId);
+            } catch (Exception e) {
+                log.error("[VideoConsumer] 任务处理失败: taskId={}", taskId, e);
+            } finally {
+                taskQueue.markComplete(queueName, taskId);
+                taskQueue.release(queueName);
+            }
+        });
+    }
+
+    private void processTask(String queueName, String taskId) {
         VideoTask task;
         try {
             task = videoGenerationService.getByTaskId(taskId);
@@ -139,6 +178,7 @@ public class VideoGenerationConsumer {
             return;
         }
 
+        refreshQueueMaxConcurrent(queueName, task.getModelId());
         videoGenerationService.updateStatus(task.getId(), 1, null);
 
         Map<String, VideoGenerationStrategy> map = getStrategyMap();
@@ -149,9 +189,10 @@ public class VideoGenerationConsumer {
 
         // 优先按模型 code 匹配策略名，否则使用第一个策略
         VideoGenerationStrategy strategy = null;
+        AiModel model = null;
         if (task.getModelId() != null) {
             try {
-                AiModel model = aiModelService.getById(task.getModelId());
+                model = aiModelService.getById(task.getModelId());
                 if (model != null) {
                     strategy = map.get(model.getCode());
                     if (strategy == null && model.getApiConfigId() != null) {
@@ -169,6 +210,7 @@ public class VideoGenerationConsumer {
             strategy = map.values().iterator().next();
         }
         try {
+            generationModelCapabilityService.validateVideoTask(model, task);
             String platformTaskId = strategy.submit(task);
             log.info("[VideoConsumer] 任务已提交到平台: taskId={}, platformTaskId={}", taskId, platformTaskId);
             strategy.poll(platformTaskId, task);
@@ -181,6 +223,56 @@ public class VideoGenerationConsumer {
             log.error("[VideoConsumer] 任务执行失败: taskId={}", taskId, e);
             videoGenerationService.updateStatus(task.getId(), 3, e.getMessage());
         }
+    }
+
+    private List<String> collectQueueNamesToConsume() {
+        List<String> queueNames = new ArrayList<>(taskQueue.listRegisteredQueuesByPrefix(MODEL_QUEUE_PREFIX));
+        queueNames.sort(String::compareTo);
+        return queueNames;
+    }
+
+    private void refreshQueueMaxConcurrent(String queueName, Long modelId) {
+        int maxConcurrent = resolveQueueMaxConcurrent(modelId);
+        taskQueue.setMaxConcurrent(queueName, maxConcurrent);
+    }
+
+    private int resolveQueueMaxConcurrent(Long modelId) {
+        AiModel model = resolveQueueModel(modelId);
+        Integer configured = model != null ? model.getMaxConcurrency() : null;
+        return configured != null && configured > 0 ? configured : 1;
+    }
+
+    private AiModel resolveQueueModel(Long modelId) {
+        if (modelId != null) {
+            try {
+                AiModel model = aiModelService.getById(modelId);
+                if (model != null && model.getStatus() != null && model.getStatus() == 1) {
+                    return model;
+                }
+            } catch (Exception e) {
+                log.warn("[VideoConsumer] 读取视频模型并发配置失败: modelId={}", modelId, e);
+            }
+        }
+
+        AiModel defaultModel = aiModelService.getDefaultByType(MODEL_TYPE_VIDEO);
+        if (defaultModel != null) {
+            return defaultModel;
+        }
+
+        List<AiModel> videoModels = aiModelService.getListByType(MODEL_TYPE_VIDEO);
+        return videoModels.isEmpty() ? null : videoModels.get(0);
+    }
+
+    private String resolveQueueName(Long modelId) {
+        if (modelId == null) {
+            throw new BusinessException("视频生成任务缺少 modelId，无法路由到模型队列");
+        }
+        return MODEL_QUEUE_PREFIX + modelId;
+    }
+
+    @PreDestroy
+    public void shutdownWorkerExecutor() {
+        workerExecutor.shutdownNow();
     }
 
     /**

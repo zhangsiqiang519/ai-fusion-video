@@ -13,7 +13,11 @@ export interface AiModel {
   sort: number;
   status: number;
   config: string | null;
+  maxConcurrency: number | null;
   defaultModel: boolean;
+  supportVision: boolean;
+  supportReasoning: boolean;
+  contextWindow: number | null;
   apiConfigId: number | null;
   createTime: string;
   updateTime: string;
@@ -28,7 +32,11 @@ export interface AiModelCreateReq {
   description?: string;
   sort?: number;
   config?: string;
+  maxConcurrency?: number;
   defaultModel?: boolean;
+  supportVision?: boolean;
+  supportReasoning?: boolean;
+  contextWindow?: number;
   apiConfigId?: number;
 }
 
@@ -43,7 +51,11 @@ export interface AiModelUpdateReq {
   sort?: number;
   status?: number;
   config?: string;
+  maxConcurrency?: number;
   defaultModel?: boolean;
+  supportVision?: boolean;
+  supportReasoning?: boolean;
+  contextWindow?: number;
   apiConfigId?: number;
 }
 
@@ -55,6 +67,13 @@ export interface ModelPreset {
   modelType: number;
   description: string;
   config: Record<string, unknown>;
+}
+
+/** 远程 API 返回的可用模型 */
+export interface RemoteModel {
+  id: string;
+  ownedBy: string;
+  modelType?: number | null;
 }
 
 /** 分页结果 */
@@ -81,6 +100,7 @@ export interface ApiConfig {
   name: string;
   platform: string | null;
   apiUrl: string | null;
+  autoAppendV1Path: boolean;
   apiKey: string | null;
   appId: string | null;
   appSecret: string | null;
@@ -97,6 +117,7 @@ export interface ApiConfigSaveReq {
   name: string;
   platform?: string;
   apiUrl?: string;
+  autoAppendV1Path?: boolean;
   apiKey?: string;
   appId?: string;
   appSecret?: string;
@@ -121,6 +142,8 @@ export const PLATFORM_OPTIONS = [
   { value: "openai_compatible", label: "OpenAI 兼容", description: "OpenAI / DeepSeek / 智谱 / 硅基流动等" },
   { value: "volcengine", label: "火山引擎（豆包）", description: "字节跳动火山引擎豆包大模型" },
   { value: "vertex_ai", label: "Google Vertex AI", description: "Google Cloud Vertex AI Gemini" },
+  { value: "gemini", label: "Google Gemini API", description: "Google AI Studio / Gemini Developer API" },
+  { value: "GoogleFlowReverseApi", label: "Google Flow Reverse API", description: "Flow2API 反向代理，图片/视频 alias 模型" },
   { value: "dashscope", label: "阿里 DashScope", description: "阿里云通义千问系列" },
   { value: "anthropic", label: "Anthropic", description: "Claude 系列模型" },
   { value: "ollama", label: "Ollama", description: "本地部署的开源模型" },
@@ -155,6 +178,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
   siliconflow: "硅基流动",
   vertex_ai: "Vertex AI",
   vertexai: "Vertex AI",
+  GoogleFlowReverseApi: "Google Flow Reverse API",
   gemini: "Gemini",
   dashscope: "DashScope",
   anthropic: "Anthropic",
@@ -234,4 +258,8 @@ export const apiConfigApi = {
   /** 删除 API 配置 */
   delete: (id: number) =>
     http.delete<never, boolean>(`/ai/api-config/delete?id=${id}`),
+
+  /** 获取远程可用模型列表 */
+  remoteModels: (id: number) =>
+    http.get<never, RemoteModel[]>(`/ai/api-config/remote-models?id=${id}`),
 };

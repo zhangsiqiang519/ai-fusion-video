@@ -16,6 +16,7 @@ import { Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { cn } from "@/lib/utils";
 import { ToolResultDisplay } from "@/components/dashboard/agent-pipeline-results";
+import { StreamMarkdown } from "@/components/dashboard/stream-markdown";
 import {
   pipelineStream,
   cancelPipeline,
@@ -34,6 +35,7 @@ type SubTimelineItem =
 /** 时间线中的每个元素 */
 type TimelineItem =
   | { type: "tool"; id: string; name: string; arguments: string; status: "calling" | "done" | "error"; result?: string; agentName?: string; children?: SubTimelineItem[] }
+  | { type: "reasoning"; text: string; durationMs?: number }
   | { type: "content"; text: string };
 
 interface PipelineState {
@@ -55,6 +57,68 @@ interface AgentPipelineProps {
   onComplete?: (conversationId?: string) => void;
   /** 错误回调 */
   onError?: (error: string) => void;
+}
+
+function appendReasoningToSubTimeline(
+  children: SubTimelineItem[],
+  reasoningContent: string
+): SubTimelineItem[] {
+  const last = children[children.length - 1];
+  if (last && last.type === "reasoning") {
+    return [
+      ...children.slice(0, -1),
+      { ...last, text: last.text + reasoningContent },
+    ];
+  }
+  return [...children, { type: "reasoning", text: reasoningContent }];
+}
+
+function updateLastSubTimelineReasoningDuration(
+  children: SubTimelineItem[],
+  durationMs: number
+): SubTimelineItem[] {
+  for (let index = children.length - 1; index >= 0; index--) {
+    const item = children[index];
+    if (item.type === "reasoning") {
+      return children.map((child, childIndex) =>
+        childIndex === index && child.type === "reasoning"
+          ? { ...child, durationMs }
+          : child
+      );
+    }
+  }
+  return children;
+}
+
+function appendReasoningToTimeline(
+  timeline: TimelineItem[],
+  reasoningContent: string
+): TimelineItem[] {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "reasoning") {
+    return [
+      ...timeline.slice(0, -1),
+      { ...last, text: last.text + reasoningContent },
+    ];
+  }
+  return [...timeline, { type: "reasoning", text: reasoningContent }];
+}
+
+function updateLastTimelineReasoningDuration(
+  timeline: TimelineItem[],
+  durationMs: number
+): TimelineItem[] {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const item = timeline[index];
+    if (item.type === "reasoning") {
+      return timeline.map((timelineItem, timelineIndex) =>
+        timelineIndex === index && timelineItem.type === "reasoning"
+          ? { ...timelineItem, durationMs }
+          : timelineItem
+      );
+    }
+  }
+  return timeline;
 }
 
 // ========== 工具名中文映射 ==========
@@ -97,6 +161,7 @@ const toolDisplayNames: Record<string, string> = {
   save_storyboard_scene_shots: "保存分镜场次镜头",
 
   // ── 生图 ──
+  get_generation_model_capabilities: "查询生成模型能力",
   generate_image: "AI 生成图片",
 
   // ── 子 Agent ──
@@ -168,23 +233,18 @@ export function AgentPipeline({
               next.timeline = appendToToolChildren(
                 next.timeline,
                 event.parentToolCallId!,
-                (children) => {
-                  const last = children[children.length - 1];
-                  if (last && last.type === "reasoning") {
-                    return [
-                      ...children.slice(0, -1),
-                      { ...last, text: last.text + event.reasoningContent },
-                    ];
-                  }
-                  return [
-                    ...children,
-                    { type: "reasoning" as const, text: event.reasoningContent! },
-                  ];
-                }
+                (children) =>
+                  appendReasoningToSubTimeline(
+                    children,
+                    event.reasoningContent!
+                  )
               );
             } else {
               next.status = "reasoning";
-              next.reasoningText += event.reasoningContent;
+              next.timeline = appendReasoningToTimeline(
+                next.timeline,
+                event.reasoningContent
+              );
             }
           }
           break;
@@ -193,6 +253,10 @@ export function AgentPipeline({
           next.status = "running";
           if (event.reasoningDurationMs && !isSubAgent) {
             next.reasoningDurationMs = event.reasoningDurationMs;
+            next.timeline = updateLastTimelineReasoningDuration(
+              next.timeline,
+              event.reasoningDurationMs
+            );
           }
           if (event.content) {
             if (isSubAgent) {
@@ -202,12 +266,10 @@ export function AgentPipeline({
                 (children) => {
                   let updated = [...children];
                   if (event.reasoningDurationMs) {
-                    const lastR = updated.findLast((c) => c.type === "reasoning");
-                    if (lastR && lastR.type === "reasoning") {
-                      updated = updated.map((c) =>
-                        c === lastR ? { ...c, durationMs: event.reasoningDurationMs } : c
-                      );
-                    }
+                    updated = updateLastSubTimelineReasoningDuration(
+                      updated,
+                      event.reasoningDurationMs
+                    );
                   }
                   const last = updated[updated.length - 1];
                   if (last && last.type === "content") {
@@ -378,7 +440,11 @@ export function AgentPipeline({
   // 自动启动
   useEffect(() => {
     if (autoStart && !startedRef.current) {
-      startStream();
+      queueMicrotask(() => {
+        if (!startedRef.current) {
+          startStream();
+        }
+      });
     }
   }, [autoStart, startStream]);
 
@@ -456,29 +522,35 @@ export function AgentPipeline({
         )}
       </div>
 
-      {/* 思考过程 */}
-      <AnimatePresence>
-        {state.reasoningText && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden"
-          >
-            <Think
-              style={{ maxHeight: 192, overflowY: "auto" }}
-              title={state.reasoningDurationMs ? `思考 (${(state.reasoningDurationMs / 1000).toFixed(1)}s)` : undefined}
-            >
-              {state.reasoningText}
-            </Think>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* 时间线：工具调用和内容按到达顺序交替渲染 */}
       {state.timeline.length > 0 && (
         <div ref={scrollRef} className="space-y-2 max-h-[60vh] overflow-y-auto">
           {state.timeline.map((item, idx) => {
+            if (item.type === "reasoning") {
+              const title = item.durationMs
+                ? `思考 (${(item.durationMs / 1000).toFixed(1)}s)`
+                : isActive && idx === state.timeline.length - 1
+                  ? "思考中"
+                  : "思考";
+              return (
+                <motion.div
+                  key={`reasoning-${idx}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                >
+                  <Think
+                    style={{ maxHeight: 192, overflowY: "auto" }}
+                    title={title}
+                  >
+                    <StreamMarkdown
+                      content={item.text}
+                      streaming={isActive && idx === state.timeline.length - 1}
+                    />
+                  </Think>
+                </motion.div>
+              );
+            }
+
             if (item.type === "tool") {
               const isExpanded = expandedTools.has(item.id);
               const hasResult = (item.status === "done" || item.status === "error") && item.result;
@@ -580,14 +652,27 @@ export function AgentPipeline({
                           {item.children && item.children.length > 0 && (
                             <div className="space-y-2 pl-2 border-l-2 border-purple-500/20">
                               {item.children.map((child, ci) => {
+                                const childCount = item.children?.length ?? 0;
                                 if (child.type === "reasoning") {
+                                  const childIsStreaming =
+                                    item.status === "calling" &&
+                                    ci === childCount - 1;
+                                  const childTitle = child.durationMs
+                                    ? `子Agent 思考 (${(child.durationMs / 1000).toFixed(1)}s)`
+                                    : childIsStreaming
+                                      ? "子Agent 思考中"
+                                      : "子Agent 思考";
                                   return (
                                     <div key={`sub-reasoning-${ci}`} className="text-xs">
                                       <Think
                                         style={{ maxHeight: 120, overflowY: "auto" }}
-                                        title={child.durationMs ? `子Agent 思考 (${(child.durationMs / 1000).toFixed(1)}s)` : "子Agent 思考"}
+                                        title={childTitle}
                                       >
-                                        {child.text}
+                                        <StreamMarkdown
+                                          content={child.text}
+                                          compact
+                                          streaming={childIsStreaming}
+                                        />
                                       </Think>
                                     </div>
                                   );

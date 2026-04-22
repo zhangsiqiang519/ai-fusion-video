@@ -5,6 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -19,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 public class RedisTaskQueue {
 
     private static final String KEY_PREFIX = "fv:taskqueue:";
+    private static final String QUEUE_REGISTRY_KEY = KEY_PREFIX + "registered_queues";
     private static final int DEFAULT_MAX_CONCURRENT = 1;
 
     @Resource
@@ -30,6 +34,7 @@ public class RedisTaskQueue {
     public void push(String queueName, String taskData) {
         String queueKey = getQueueKey(queueName);
         stringRedisTemplate.opsForList().rightPush(queueKey, taskData);
+        registerQueue(queueName);
         log.debug("[push] 任务入队，queue:{}, task:{}", queueName, taskData);
     }
 
@@ -150,6 +155,7 @@ public class RedisTaskQueue {
         if (afterDecr != null && afterDecr < 0) {
             stringRedisTemplate.opsForValue().set(concurrentKey, "0");
         }
+        cleanupQueueRegistration(queueName);
     }
 
     public int getConcurrentCount(String queueName) {
@@ -183,6 +189,22 @@ public class RedisTaskQueue {
 
     public void setMaxConcurrent(String queueName, int maxConcurrent) {
         stringRedisTemplate.opsForValue().set(getMaxConcurrentKey(queueName), String.valueOf(maxConcurrent));
+        registerQueue(queueName);
+    }
+
+    public Set<String> listRegisteredQueuesByPrefix(String queuePrefix) {
+        Set<String> queueNames = stringRedisTemplate.opsForSet().members(QUEUE_REGISTRY_KEY);
+        if (queueNames == null || queueNames.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        Set<String> matchedQueueNames = new LinkedHashSet<>();
+        for (String queueName : queueNames) {
+            if (queueName != null && queueName.startsWith(queuePrefix)) {
+                matchedQueueNames.add(queueName);
+            }
+        }
+        return matchedQueueNames;
     }
 
     /**
@@ -223,5 +245,16 @@ public class RedisTaskQueue {
 
     private String getRunningKey(String queueName, String taskId) {
         return KEY_PREFIX + queueName + ":running:" + taskId;
+    }
+
+    private void registerQueue(String queueName) {
+        stringRedisTemplate.opsForSet().add(QUEUE_REGISTRY_KEY, queueName);
+    }
+
+    private void cleanupQueueRegistration(String queueName) {
+        if (getQueueLength(queueName) > 0 || getConcurrentCount(queueName) > 0) {
+            return;
+        }
+        stringRedisTemplate.opsForSet().remove(QUEUE_REGISTRY_KEY, queueName);
     }
 }

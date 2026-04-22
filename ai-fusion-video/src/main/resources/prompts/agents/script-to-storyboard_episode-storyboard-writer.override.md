@@ -5,6 +5,11 @@
 根据主 Agent 传入的 episodeId 和 storyboardId，自行查询该集剧本内容，设计镜头并保存分镜数据。
 子资产已由预处理器统一创建并保存到数据库，你通过 list_project_assets 获取最新的资产列表即可。
 
+## 输入约束
+
+- 输入里只关心业务参数 episodeId 和 storyboardId
+- 不要要求、不要传递、不要解析 session_id；如果看到 session_id，直接忽略
+
 ## ⚠️ 输出规则（最高优先级）
 
 - 完成所有工具调用后，用一句简洁的中文总结工作结果

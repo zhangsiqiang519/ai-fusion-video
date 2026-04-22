@@ -28,6 +28,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Think } from "@ant-design/x";
 import { XMarkdown } from "@ant-design/x-markdown";
 import { cn } from "@/lib/utils";
+import { StreamMarkdown } from "@/components/dashboard/stream-markdown";
+import { resolveMediaUrl } from "@/lib/api/client";
+import { GenerationModelCapabilitiesResult } from "@/components/dashboard/generation-model-capabilities-result";
+import {
+  ImageGenerateResult,
+  VideoGenerateResult,
+} from "@/components/dashboard/generation-media-result";
 import { usePipelineStore } from "@/lib/store/pipeline-store";
 import type { PipelineTask, TimelineItem, SubTimelineItem } from "@/lib/store/pipeline-store";
 import {
@@ -78,6 +85,7 @@ const toolDisplayNames: Record<string, string> = {
   save_storyboard_scene_shots: "保存分镜场次镜头",
 
   // ── 生图 ──
+  get_generation_model_capabilities: "查询生成模型能力",
   generate_image: "AI 生成图片",
 
   // ── 生视频 ──
@@ -110,15 +118,15 @@ function formatElapsed(durationMs: number): string {
 
 /** 实时计时 hook：running 时每秒 tick，结束后停止 */
 function useElapsed(task: PipelineTask): string {
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => task.finishedAt ?? Date.now());
 
   useEffect(() => {
     if (task.status !== "running") return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [task.status]);
 
-  const endTime = task.finishedAt ?? Date.now();
+  const endTime = task.finishedAt ?? now;
   return formatElapsed(endTime - task.createdAt);
 }
 
@@ -474,17 +482,24 @@ function SubAgentCard({
             <div ref={innerScrollRef} className="border-t border-purple-500/10 px-4 py-3 space-y-2 max-h-[400px] overflow-y-auto">
               {children.map((child, cidx) => {
                 if (child.type === "reasoning") {
+                  const childIsStreaming =
+                    isRunning && cidx === children.length - 1;
+                  const childTitle = child.durationMs
+                    ? `思考 (${(child.durationMs / 1000).toFixed(1)}s)`
+                    : childIsStreaming
+                      ? "思考中"
+                      : "思考";
                   return (
                     <Think
                       key={`sub-reasoning-${cidx}`}
                       style={{ maxHeight: 120, overflowY: "auto" }}
-                      title={
-                        child.durationMs
-                          ? `思考 (${(child.durationMs / 1000).toFixed(1)}s)`
-                          : undefined
-                      }
+                      title={childTitle}
                     >
-                      {child.text}
+                      <StreamMarkdown
+                        content={child.text}
+                        compact
+                        streaming={childIsStreaming}
+                      />
                     </Think>
                   );
                 }
@@ -548,20 +563,47 @@ interface MessageTimelineProps {
 }
 
 function MessageTimeline({ reasoningText, reasoningDurationMs, timeline, streaming, error }: MessageTimelineProps) {
+  const hasTimelineReasoning = timeline.some((item) => item.type === "reasoning");
+  const reasoningTitle = reasoningDurationMs
+    ? `思考 (${(reasoningDurationMs / 1000).toFixed(1)}s)`
+    : streaming
+      ? "思考中"
+      : "思考";
+
   return (
     <>
-      {/* 思考过程 */}
-      {reasoningText && (
+      {/* 历史兼容：旧数据里 reasoning 仍是单独字段时，作为头部兜底展示 */}
+      {!hasTimelineReasoning && reasoningText && (
         <Think
           style={{ maxHeight: 192, overflowY: "auto" }}
-          title={reasoningDurationMs ? `思考 (${(reasoningDurationMs / 1000).toFixed(1)}s)` : undefined}
+          title={reasoningTitle}
         >
-          {reasoningText}
+          <StreamMarkdown content={reasoningText} streaming={!!streaming} />
         </Think>
       )}
 
       {/* 时间线条目 */}
       {timeline.map((item, idx) => {
+        if (item.type === "reasoning") {
+          const itemTitle = item.durationMs
+            ? `思考 (${(item.durationMs / 1000).toFixed(1)}s)`
+            : streaming && idx === timeline.length - 1
+              ? "思考中"
+              : "思考";
+          return (
+            <Think
+              key={`reasoning-${idx}`}
+              style={{ maxHeight: 192, overflowY: "auto" }}
+              title={itemTitle}
+            >
+              <StreamMarkdown
+                content={item.text}
+                streaming={streaming && idx === timeline.length - 1}
+              />
+            </Think>
+          );
+        }
+
         if (item.type === "tool") {
           // 子 Agent 工具 → 渲染嵌套卡片
           if (isSubAgentTool(item.name) || (item.children && item.children.length > 0)) {
@@ -613,24 +655,24 @@ function MessageTimeline({ reasoningText, reasoningDurationMs, timeline, streami
 // ========== 实时 Pipeline 详情面板（右侧） ==========
 
 function PipelineDetailPanel({ task }: { task: PipelineTask }) {
-  const [isIdle, setIsIdle] = useState(false);
+  const [idleTimelineLength, setIdleTimelineLength] = useState<number | null>(null);
+  const timelineLength = task.state.timeline.length;
+  const isIdle = task.status === "running" && idleTimelineLength === timelineLength;
 
   // 外层智能自动滚动（用户上滚打断，滚回底部恢复）
   const timelineRef = useSmartScroll(
-    [task.state.timeline, task.state.reasoningText, isIdle],
+    [task.state.timeline, isIdle],
     task.status === "running"
   );
 
   // 空闲检测：超过 2 秒无新 timeline 更新时显示提示
   useEffect(() => {
-    if (task.status !== "running") {
-      setIsIdle(false);
-      return;
-    }
-    setIsIdle(false);
-    const timer = setTimeout(() => setIsIdle(true), 2000);
+    if (task.status !== "running") return;
+    const timer = setTimeout(() => {
+      setIdleTimelineLength(timelineLength);
+    }, 2000);
     return () => clearTimeout(timer);
-  }, [task.state.timeline, task.state.reasoningText, task.status]);
+  }, [timelineLength, task.status]);
 
   const statusText = {
     running: "运行中",
@@ -747,6 +789,14 @@ const assetTypeNames: Record<string, string> = {
   effect: "特效",
 };
 
+const storyboardShotTypeNames: Record<string, string> = {
+  远景: "远景",
+  全景: "全景",
+  中景: "中景",
+  近景: "近景",
+  特写: "特写",
+};
+
 // ========== 工具结果格式化显示（带 toolName 分派） ==========
 
 /** 将值友好化展示 */
@@ -792,6 +842,12 @@ function ToolResultDisplay({ toolName, content }: { toolName: string; content: s
 
   // 根据工具类型做针对性展示
   switch (toolName) {
+    case "get_generation_model_capabilities":
+      return <GenerationModelCapabilitiesResult data={parsed} />;
+    case "generate_image":
+      return <ImageGenerateResult data={parsed} />;
+    case "generate_video":
+      return <VideoGenerateResult data={parsed} />;
     case "list_project_assets":
       return <AssetListResult data={parsed} />;
     case "query_asset_metadata":
@@ -833,7 +889,6 @@ function ToolResultDisplay({ toolName, content }: { toolName: string; content: s
     case "get_script":
     case "get_asset":
     case "list_my_projects":
-    case "generate_image":
     default:
       return <GenericResult data={parsed} />;
   }
@@ -1269,6 +1324,86 @@ function SceneDetailResult({ data }: { data: unknown }) {
 /** 子资产列表结果 — query_asset_items */
 function AssetItemsResult({ data }: { data: unknown }) {
   const obj = data as Record<string, unknown>;
+  const assets = obj.assets as Array<Record<string, unknown>> | undefined;
+
+  if (assets && Array.isArray(assets)) {
+    const totalAssets = (obj.totalAssets as number) ?? assets.length;
+    const totalItems = assets.reduce((sum, asset) => {
+      const assetItems = asset.items as Array<Record<string, unknown>> | undefined;
+      const assetTotalItems = typeof asset.totalItems === "number"
+        ? asset.totalItems
+        : assetItems?.length ?? 0;
+      return sum + assetTotalItems;
+    }, 0);
+
+    return (
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-medium text-foreground">子资产列表</span>
+          <span className="text-[10px] text-muted-foreground/50">
+            共 {totalAssets} 个资产
+          </span>
+          <span className="text-[10px] text-muted-foreground/50">
+            共 {totalItems} 个子资产
+          </span>
+        </div>
+
+        <ul className="space-y-0.5">
+          {assets.slice(0, 8).map((asset, i) => {
+            const status = asset.status as string | undefined;
+            const message = asset.message as string | undefined;
+            const assetType = asset.assetType == null ? undefined : String(asset.assetType);
+            const assetItems = asset.items as Array<Record<string, unknown>> | undefined;
+            const assetTotalItems = typeof asset.totalItems === "number"
+              ? asset.totalItems
+              : assetItems?.length ?? 0;
+            const previewNames = assetItems?.slice(0, 3)
+              .map(item => String(item.name || item.id || "未命名子资产"))
+              .join(" / ");
+
+            return (
+              <li
+                key={asset.assetId ? String(asset.assetId) : i}
+                className="flex items-center gap-2 text-xs text-muted-foreground/90"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-teal-400/40 shrink-0" />
+                <span className="font-medium text-foreground">
+                  {String(asset.assetName || `资产${i + 1}`)}
+                </span>
+                {assetType ? (
+                  <span className="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400 text-[10px]">
+                    {assetTypeNames[assetType] || assetType}
+                  </span>
+                ) : null}
+                {status === "error" ? (
+                  <span className="text-[10px] text-destructive">
+                    {message || "查询失败"}
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-[10px] text-muted-foreground/50">
+                      {assetTotalItems} 个子资产
+                    </span>
+                    {previewNames && (
+                      <span className="text-[10px] text-muted-foreground/60 truncate">
+                        {previewNames}
+                      </span>
+                    )}
+                  </>
+                )}
+              </li>
+            );
+          })}
+          {assets.length > 8 && (
+            <li className="text-[10px] text-muted-foreground/50 pl-3">
+              …还有 {assets.length - 8} 个资产
+            </li>
+          )}
+        </ul>
+      </div>
+    );
+  }
+
   const assetName = obj.assetName as string | undefined;
   const assetType = obj.assetType as string | undefined;
   const totalItems = obj.totalItems as number | undefined;
@@ -1450,29 +1585,140 @@ function StoryboardResult({ data, toolName }: { data: unknown; toolName: string 
 
   // 单个分镜详情（get_storyboard / query_storyboard）
   const title = obj.title as string | undefined;
+  const description = obj.description as string | undefined;
   const totalItems = obj.totalItems as number | undefined;
   const items = obj.items as Array<Record<string, unknown>> | undefined;
   const storyboardId = obj.storyboardId ?? obj.id;
+  const shotItems = Array.isArray(items) ? items : [];
 
   return (
-    <div className="space-y-1">
-      {title && (
-        <p className="text-xs font-medium text-foreground">{title}</p>
-      )}
-      <p className="text-[10px] text-muted-foreground/60">
-        {storyboardId !== undefined && `ID: ${storyboardId}`}
-        {totalItems !== undefined && ` · 共 ${totalItems} 个镜头`}
-        {items && ` · 当前 ${items.length} 项`}
-      </p>
-      {items && items.length > 0 && items.slice(0, 3).map((item, i) => (
-        <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground/90">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-400/60 shrink-0" />
-          <span className="truncate">
-            {(item.sceneNumber as string) || (item.title as string) || `#${i + 1}`}
-            {item.shotCount !== undefined && ` · ${item.shotCount} 个镜头`}
-          </span>
+    <div className="space-y-1.5">
+      <div className="space-y-0.5">
+        {title && (
+          <p className="text-xs font-medium text-foreground">{title}</p>
+        )}
+        <p className="text-[10px] text-muted-foreground/60">
+          {storyboardId !== undefined && `ID: ${storyboardId}`}
+          {totalItems !== undefined && ` · 共 ${totalItems} 个镜头`}
+          {shotItems.length > 0 && ` · 预览 ${Math.min(shotItems.length, 3)} 项`}
+        </p>
+        {description && (
+          <p className="text-[10px] leading-4 text-muted-foreground/70 line-clamp-1">
+            {description}
+          </p>
+        )}
+      </div>
+
+      {shotItems.length > 0 ? (
+        <div className="space-y-1.5">
+          {shotItems.slice(0, 3).map((item, i) => {
+            const shotNumber = item.shotNumber ?? item.autoShotNumber ?? i + 1;
+            const shotType = item.shotType as string | undefined;
+            const cameraMovement = item.cameraMovement as string | undefined;
+            const content =
+              (item.content as string | undefined) ||
+              (item.sceneExpectation as string | undefined) ||
+              "（无画面描述）";
+            const duration = typeof item.duration === "number" ? item.duration : undefined;
+            const imageUrl = resolveMediaUrl(
+              (item.generatedImageUrl as string | null | undefined) ||
+              (item.imageUrl as string | null | undefined)
+            );
+            const videoUrl = resolveMediaUrl(
+              (item.generatedVideoUrl as string | null | undefined) ||
+              (item.videoUrl as string | null | undefined)
+            );
+            const hasImage = !!imageUrl;
+            const hasVideo = !!videoUrl;
+
+            return (
+              <div
+                key={String(item.id ?? i)}
+                className="rounded-lg border border-border/25 bg-background/50 px-2 py-1.5"
+              >
+                <div className="flex gap-2">
+                  <div className="relative h-10 w-16 shrink-0 overflow-hidden rounded-md border border-border/20 bg-muted/20">
+                    {hasVideo ? (
+                      <>
+                        <video
+                          src={videoUrl || ""}
+                          className="h-full w-full object-cover"
+                          muted
+                          playsInline
+                          preload="metadata"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/15">
+                          <Clapperboard className="h-3.5 w-3.5 text-white/90" />
+                        </div>
+                      </>
+                    ) : hasImage ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imageUrl || ""}
+                          alt={`镜头 ${String(shotNumber)}`}
+                          className="h-full w-full object-cover"
+                        />
+                      </>
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Film className="h-4 w-4 text-muted-foreground/35" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-xs font-semibold text-foreground">
+                        #{String(shotNumber)}
+                      </span>
+                      {shotType && (
+                        <span className="rounded bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {storyboardShotTypeNames[shotType] || shotType}
+                        </span>
+                      )}
+                      {cameraMovement && (
+                        <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-400">
+                          {cameraMovement}
+                        </span>
+                      )}
+                      {duration !== undefined && (
+                        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-400">
+                          {duration}s
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-[10px] leading-4 text-muted-foreground/85 line-clamp-2">
+                      {content}
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-1">
+                      {hasImage && (
+                        <span className="text-[10px] text-cyan-400/80">有画面</span>
+                      )}
+                      {hasVideo && (
+                        <span className="text-[10px] text-emerald-400/80">已有视频</span>
+                      )}
+                      {!hasImage && !hasVideo && (
+                        <span className="text-[10px] text-muted-foreground/60">暂无媒体</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {shotItems.length > 3 && (
+            <p className="pl-1 text-[10px] text-muted-foreground/60">
+              …还有 {shotItems.length - 3} 个镜头未展开
+            </p>
+          )}
         </div>
-      ))}
+      ) : (
+        <p className="text-[11px] text-muted-foreground/70">暂无镜头数据</p>
+      )}
     </div>
   );
 }
@@ -1596,10 +1842,112 @@ function GenericResult({ data }: { data: unknown }) {
 
 // ========== 将历史消息转换为统一时间线格式 ==========
 
+function pushReasoningToTimeline(
+  timeline: TimelineItem[],
+  text: string,
+  durationMs?: number
+) {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "reasoning") {
+    last.text += text;
+    if (durationMs !== undefined) {
+      last.durationMs = durationMs;
+    }
+    return;
+  }
+  timeline.push({
+    type: "reasoning",
+    text,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  });
+}
+
+function pushContentToTimeline(timeline: TimelineItem[], text: string) {
+  const last = timeline[timeline.length - 1];
+  if (last && last.type === "content") {
+    last.text += text;
+    return;
+  }
+  timeline.push({ type: "content", text });
+}
+
+function updateLastTimelineReasoningDuration(
+  timeline: TimelineItem[],
+  durationMs: number
+) {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const item = timeline[index];
+    if (item.type === "reasoning") {
+      item.durationMs = durationMs;
+      return;
+    }
+  }
+}
+
+function pushReasoningToSubTimeline(
+  children: SubTimelineItem[],
+  text: string,
+  durationMs?: number
+) {
+  const last = children[children.length - 1];
+  if (last && last.type === "reasoning") {
+    last.text += text;
+    if (durationMs !== undefined) {
+      last.durationMs = durationMs;
+    }
+    return;
+  }
+  children.push({
+    type: "reasoning",
+    text,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  });
+}
+
+function pushContentToSubTimeline(children: SubTimelineItem[], text: string) {
+  const last = children[children.length - 1];
+  if (last && last.type === "content") {
+    last.text += text;
+    return;
+  }
+  children.push({ type: "content", text });
+}
+
+function updateLastSubTimelineReasoningDuration(
+  children: SubTimelineItem[],
+  durationMs: number
+) {
+  for (let index = children.length - 1; index >= 0; index--) {
+    const item = children[index];
+    if (item.type === "reasoning") {
+      item.durationMs = durationMs;
+      return;
+    }
+  }
+}
+
 function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["timeline"] {
   const timeline: MessageTimelineProps["timeline"] = [];
   // toolCallId → 已建 timeline 中对应 tool item 的索引，用于 TOOL_FINISHED 更新和子 Agent 归属
   const toolIndexMap = new Map<string, number>();
+
+  const appendToParentChildren = (
+    parentToolCallId: string,
+    updater: (children: SubTimelineItem[]) => void
+  ) => {
+    const parentIdx = toolIndexMap.get(parentToolCallId);
+    if (parentIdx === undefined) return false;
+
+    const parentItem = timeline[parentIdx];
+    if (parentItem.type !== "tool") return false;
+
+    if (!parentItem.children) {
+      parentItem.children = [];
+    }
+
+    updater(parentItem.children);
+    return true;
+  };
 
   for (const msg of messages) {
     if (msg.role === "tool") {
@@ -1607,43 +1955,36 @@ function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["tim
 
       if (msg.parentToolCallId) {
         // 子 Agent 内部的工具调用 → 归入父工具的 children
-        const parentIdx = toolIndexMap.get(msg.parentToolCallId);
-        if (parentIdx !== undefined) {
-          const parentItem = timeline[parentIdx];
-          if (parentItem.type === "tool") {
-            if (!parentItem.children) parentItem.children = [];
-
-            if (msg.toolStatus === "running") {
-              // 子工具调用发起
-              parentItem.children.push({
-                type: "tool",
-                id: toolCallId,
-                name: msg.toolName || "tool",
-                arguments: msg.content || "",
-                status: "calling",
-              });
-            } else {
-              // 子工具调用结果：查找已有的 calling 记录并更新
-              const existingChild = parentItem.children.find(
-                (c) => c.type === "tool" && c.id === toolCallId
-              );
-              if (existingChild && existingChild.type === "tool") {
-                existingChild.status = msg.toolStatus === "error" ? "error" : "done";
-                existingChild.result = msg.content;
-              } else {
-                // 没有对应的 calling 记录，直接添加完成记录
-                parentItem.children.push({
-                  type: "tool",
-                  id: toolCallId,
-                  name: msg.toolName || "tool",
-                  arguments: "",
-                  status: msg.toolStatus === "error" ? "error" : "done",
-                  result: msg.content,
-                });
-              }
-            }
+        appendToParentChildren(msg.parentToolCallId, (children) => {
+          if (msg.toolStatus === "running") {
+            children.push({
+              type: "tool",
+              id: toolCallId,
+              name: msg.toolName || "tool",
+              arguments: msg.content || "",
+              status: "calling",
+            });
+            return;
           }
-        }
+
+          const existingChild = children.find(
+            (child) => child.type === "tool" && child.id === toolCallId
+          );
+          if (existingChild && existingChild.type === "tool") {
+            existingChild.status = msg.toolStatus === "error" ? "error" : "done";
+            existingChild.result = msg.content;
+            return;
+          }
+
+          children.push({
+            type: "tool",
+            id: toolCallId,
+            name: msg.toolName || "tool",
+            arguments: "",
+            status: msg.toolStatus === "error" ? "error" : "done",
+            result: msg.content,
+          });
+        });
       } else {
         // 主 Agent 的工具调用
         if (msg.toolStatus === "running") {
@@ -1682,9 +2023,48 @@ function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["tim
         }
       }
     } else {
-      // assistant / user — content 文本
-      if (msg.content) {
-        timeline.push({ type: "content", text: msg.content });
+      if (msg.parentToolCallId) {
+        appendToParentChildren(msg.parentToolCallId, (children) => {
+          if (msg.reasoningContent) {
+            pushReasoningToSubTimeline(
+              children,
+              msg.reasoningContent,
+              msg.reasoningDurationMs
+            );
+          } else if (msg.reasoningDurationMs !== undefined) {
+            updateLastSubTimelineReasoningDuration(
+              children,
+              msg.reasoningDurationMs
+            );
+          }
+
+          if (msg.content) {
+            if (msg.reasoningDurationMs !== undefined) {
+              updateLastSubTimelineReasoningDuration(
+                children,
+                msg.reasoningDurationMs
+              );
+            }
+            pushContentToSubTimeline(children, msg.content);
+          }
+        });
+      } else {
+        if (msg.reasoningContent) {
+          pushReasoningToTimeline(
+            timeline,
+            msg.reasoningContent,
+            msg.reasoningDurationMs
+          );
+        } else if (msg.reasoningDurationMs !== undefined) {
+          updateLastTimelineReasoningDuration(timeline, msg.reasoningDurationMs);
+        }
+
+        if (msg.content) {
+          if (msg.reasoningDurationMs !== undefined) {
+            updateLastTimelineReasoningDuration(timeline, msg.reasoningDurationMs);
+          }
+          pushContentToTimeline(timeline, msg.content);
+        }
       }
     }
   }
@@ -1698,19 +2078,35 @@ function HistoryDetailPanel({
 }: {
   conversation: AgentConversation;
 }) {
-  const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [messageState, setMessageState] = useState<{
+    conversationId: string;
+    messages: AgentMessage[];
+  } | null>(null);
+  const loading = messageState?.conversationId !== conversation.conversationId;
+  const messages =
+    messageState?.conversationId === conversation.conversationId
+      ? messageState.messages
+      : [];
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listMessages(conversation.conversationId)
       .then((msgs) => {
-        if (!cancelled) setMessages(msgs);
+        if (!cancelled) {
+          setMessageState({
+            conversationId: conversation.conversationId,
+            messages: msgs,
+          });
+        }
       })
-      .catch(console.error)
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setMessageState({
+            conversationId: conversation.conversationId,
+            messages: [],
+          });
+        }
       });
     return () => {
       cancelled = true;
@@ -1808,10 +2204,16 @@ function PipelineTaskCard({ task }: { task: PipelineTask }) {
     const timeline = task.state.timeline;
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
+      if (item.type === "reasoning") {
+        return "AI 正在思考…";
+      }
       if (item.type === "tool") {
         return item.status === "calling"
           ? `正在${getToolDisplayName(item.name)}…`
           : `${getToolDisplayName(item.name)} ✓`;
+      }
+      if (item.type === "content") {
+        return task.status === "running" ? "AI 正在输出…" : "已生成回复";
       }
     }
     if (task.state.reasoningText) return "AI 正在思考…";

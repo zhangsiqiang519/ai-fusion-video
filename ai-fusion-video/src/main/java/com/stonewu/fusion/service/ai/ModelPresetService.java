@@ -30,6 +30,9 @@ import java.util.Map;
  *     image.json
  *   vertex_ai/
  *     image.json
+ *   google_flow_reverse_api/
+ *     image.json
+ *     video.json
  * </pre>
  * <p>
  * 当用户在后台添加模型时，如果模型 code 匹配已知预设，可自动填充 config 字段。

@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.entity.generation.ImageItem;
@@ -66,6 +67,10 @@ public class VertexAiImageStrategy implements ImageGenerationStrategy {
     @Override
     public List<String> generate(String prompt, String modelCode, int width, int height, int count,
                                   List<String> imageUrls, ApiConfig apiConfig) {
+        if (imageUrls != null && !imageUrls.isEmpty()) {
+            throw new BusinessException("当前图片模型 " + modelCode + " 使用的是 Vertex AI Imagen 文生图接口，不支持参考图输入");
+        }
+
         String projectId = apiConfig.getApiKey();
         String location = StrUtil.blankToDefault(apiConfig.getAppId(), "us-central1");
 

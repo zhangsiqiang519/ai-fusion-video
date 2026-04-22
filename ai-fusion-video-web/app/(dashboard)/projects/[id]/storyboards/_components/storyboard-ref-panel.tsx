@@ -362,6 +362,7 @@ function SceneAssetPanel({
 
       {/* 批量生图弹窗 — 传入子资产列表 */}
       <BatchGenDialog
+        key={showBatchGen ? "batch-gen-open" : "batch-gen-closed"}
         open={showBatchGen}
         onClose={() => setShowBatchGen(false)}
         assetItems={batchGenItems}
@@ -370,6 +371,7 @@ function SceneAssetPanel({
 
       {/* 批量生视频弹窗 */}
       <VideoGenDialog
+        key={showVideoGen ? "video-gen-open" : "video-gen-closed"}
         open={showVideoGen}
         onClose={() => setShowVideoGen(false)}
         items={sceneGroup.items}

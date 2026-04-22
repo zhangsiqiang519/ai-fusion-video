@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Sparkles, X, ImageIcon, Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/api/client";
@@ -50,20 +50,18 @@ export function BatchGenDialog({
   assetItems,
   onConfirm,
 }: BatchGenDialogProps) {
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-
-  // 打开时默认全选
-  useEffect(() => {
-    if (open && assetItems.length > 0) {
-      setSelected(new Set(assetItems.map((a) => a.item.id)));
-    }
-  }, [open, assetItems]);
+  const defaultSelected = useMemo(
+    () => new Set(assetItems.map((asset) => asset.item.id)),
+    [assetItems]
+  );
+  const [selectedOverride, setSelectedOverride] = useState<Set<number> | null>(null);
+  const selected = selectedOverride ?? defaultSelected;
 
   if (!open) return null;
 
   const toggleItem = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
+    setSelectedOverride((prev) => {
+      const next = new Set(prev ?? selected);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
@@ -72,9 +70,9 @@ export function BatchGenDialog({
 
   const toggleAll = () => {
     if (selected.size === assetItems.length) {
-      setSelected(new Set());
+      setSelectedOverride(new Set());
     } else {
-      setSelected(new Set(assetItems.map((a) => a.item.id)));
+      setSelectedOverride(new Set(assetItems.map((a) => a.item.id)));
     }
   };
 

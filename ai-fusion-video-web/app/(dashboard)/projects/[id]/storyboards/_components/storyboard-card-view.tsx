@@ -26,6 +26,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+type SortableBindings = {
+  attributes?: ReturnType<typeof useSortable>["attributes"];
+  listeners?: ReturnType<typeof useSortable>["listeners"];
+};
+
 // 使用 React.memo 避免拖拽时其他不需要参与重排的卡片重新渲染，造成卡顿
 const CardItemUI = memo(
   React.forwardRef<
@@ -36,8 +41,8 @@ const CardItemUI = memo(
       isSelected: boolean;
       onSelect?: () => void;
       onVideoGen?: (itemId: number) => void;
-      attributes?: any;
-      listeners?: any;
+      attributes?: SortableBindings["attributes"];
+      listeners?: SortableBindings["listeners"];
       style?: React.CSSProperties;
       isDragging?: boolean;
       isOverlay?: boolean;

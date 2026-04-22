@@ -1,6 +1,12 @@
 "use client";
 
 import { resolveMediaUrl } from "@/lib/api/client";
+import { GenerationModelCapabilitiesResult } from "@/components/dashboard/generation-model-capabilities-result";
+import {
+  ImageGenerateResult,
+  ThumbImage,
+  VideoGenerateResult,
+} from "@/components/dashboard/generation-media-result";
 
 // ========== 常量 ==========
 
@@ -132,69 +138,6 @@ function friendlyStatus(val: unknown): string {
 // ========== 子组件 ==========
 
 type Obj = Record<string, unknown>;
-
-/** 缩略图渲染 */
-function ThumbImage({ src, label, size = 280 }: { src: string; label: string; size?: number }) {
-  return (
-    <div className="space-y-0.5">
-      <p className="text-[10px] text-muted-foreground/60">{label}</p>
-      <img
-        src={src}
-        alt={label}
-        style={{ maxWidth: size, maxHeight: size }}
-        className="rounded-md border border-border object-contain bg-muted/30"
-        loading="lazy"
-      />
-    </div>
-  );
-}
-
-/** 生图结果 — generate_image */
-function ImageGenerateResult({ data }: { data: unknown }) {
-  const obj = data as Obj;
-  const resolved = resolveMediaUrl(obj.imageUrl as string);
-  const prompt = obj.prompt as string | undefined;
-  return (
-    <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">✅ 生成成功</p>
-      {resolved && <ThumbImage src={resolved} label="生成图片" size={280} />}
-      {prompt && (
-        <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
-          <span className="text-muted-foreground/50">提示词：</span>
-          {prompt.length > 150 ? prompt.slice(0, 150) + "…" : prompt}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** 生视频结果 — generate_video */
-function VideoGenerateResult({ data }: { data: unknown }) {
-  const obj = data as Obj;
-  const videoUrl = resolveMediaUrl(obj.videoUrl as string);
-  const coverUrl = resolveMediaUrl(obj.coverUrl as string);
-  const prompt = obj.prompt as string | undefined;
-  const duration = obj.duration as number | undefined;
-  return (
-    <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">✅ 生成成功{duration != null ? `（${duration}s）` : ""}</p>
-      {coverUrl && <ThumbImage src={coverUrl} label="封面图" size={200} />}
-      {videoUrl && (
-        <video
-          src={videoUrl}
-          controls
-          className="max-w-[280px] rounded-md border border-border bg-muted/30"
-        />
-      )}
-      {prompt && (
-        <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
-          <span className="text-muted-foreground/50">提示词：</span>
-          {prompt.length > 150 ? prompt.slice(0, 150) + "…" : prompt}
-        </p>
-      )}
-    </div>
-  );
-}
 
 /** 资产列表结果 — list_project_assets */
 function AssetListResult({ data }: { data: unknown }) {
@@ -372,7 +315,14 @@ function GenericResult({ data, toolName }: { data: unknown; toolName: string }) 
     <div className="space-y-1.5">
       {imgEntries.map(([key, val]) => {
         const resolved = resolveMediaUrl(val as string);
-        return resolved ? <ThumbImage key={key} src={resolved} label={getFieldLabel(toolName, key)} size={200} /> : null;
+        return resolved ? (
+          <ThumbImage
+            key={key}
+            src={resolved}
+            label={getFieldLabel(toolName, key)}
+            previewClassName="h-[104px] w-[184px] sm:h-[116px] sm:w-[206px]"
+          />
+        ) : null;
       })}
       {textEntries.slice(0, 8).map(([key, val]) => (
         <div key={key} className="flex items-baseline gap-2 text-xs">
@@ -410,6 +360,8 @@ export function ToolResultDisplay({ toolName, result }: { toolName: string; resu
   }
 
   switch (toolName) {
+    case "get_generation_model_capabilities":
+      return <GenerationModelCapabilitiesResult data={parsed} />;
     case "generate_image":
       return <ImageGenerateResult data={parsed} />;
     case "generate_video":

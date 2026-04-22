@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Video, X, ImageIcon, Check, Film } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/api/client";
@@ -20,22 +20,18 @@ export function VideoGenDialog({
   items,
   onConfirm,
 }: VideoGenDialogProps) {
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-
-
-
-  // 打开时默认全选所有镜头
-  useEffect(() => {
-    if (open && items.length > 0) {
-      setSelected(new Set(items.map((item) => item.id)));
-    }
-  }, [open, items]);
+  const defaultSelected = useMemo(
+    () => new Set(items.map((item) => item.id)),
+    [items]
+  );
+  const [selectedOverride, setSelectedOverride] = useState<Set<number> | null>(null);
+  const selected = selectedOverride ?? defaultSelected;
 
   if (!open) return null;
 
   const toggleItem = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
+    setSelectedOverride((prev) => {
+      const next = new Set(prev ?? selected);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
@@ -44,9 +40,9 @@ export function VideoGenDialog({
 
   const toggleAll = () => {
     if (selected.size === items.length) {
-      setSelected(new Set());
+      setSelectedOverride(new Set());
     } else {
-      setSelected(new Set(items.map((item) => item.id)));
+      setSelectedOverride(new Set(items.map((item) => item.id)));
     }
   };
 

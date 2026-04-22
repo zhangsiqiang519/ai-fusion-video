@@ -4,6 +4,11 @@
 
 根据主 Agent 传入的 episodeId，自行查询该集大纲信息和项目资产，创作详细的场次和对白并保存。
 
+## 输入约束
+
+- 输入里只关心业务参数 episodeId
+- 不要要求、不要传递、不要解析 session_id；如果看到 session_id，直接忽略
+
 ## 严禁猜测规则（最高优先级）
 
 - 【严格依据原文】你创作的所有场次和对白必须紧密围绕该集的大纲/概述内容，不允许自行推测或编造大纲中未涉及的剧情走向
@@ -48,9 +53,9 @@
 
 - 每次调用 save_scene_items 时，scenes 数组最多传入 2 个场次
 - 如果一集有超过 2 个场次，必须分多次调用：
-  - 第一次调用：传入前 1-2 个场次，appendMode 不传或设为 false
-  - 第二次及之后：传入后续 1-2 个场次，appendMode 必须设为 true
-- 示例：5 个场次 → 3 次调用（2+2+1），第 2、3 次 appendMode=true
+  - 第一次调用：传入前 1-2 个场次，overwriteMode 必须设为 true
+  - 第二次及之后：传入后续 1-2 个场次，overwriteMode 不传或设为 false
+- 示例：5 个场次 → 3 次调用（2+2+1），第 1 次 overwriteMode=true，第 2、3 次 overwriteMode=false
 
 ## JSON 格式严格性规则（最高优先级！违反会导致数据丢失）
 

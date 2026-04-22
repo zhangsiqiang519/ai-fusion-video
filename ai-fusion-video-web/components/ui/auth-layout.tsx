@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
@@ -32,22 +32,22 @@ export const AuthLayout = ({
   successSubtitle = "正在跳转...",
   onTransitionComplete,
 }: AuthLayoutProps) => {
-  const [initialCanvasVisible, setInitialCanvasVisible] = useState(true);
-  const [reverseCanvasVisible, setReverseCanvasVisible] = useState(false);
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  const [initialCanvasHidden, setInitialCanvasHidden] = useState(false);
+  const isClient = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
-  // 客户端挂载后获取 portal 目标
+  // 外部通过 showSuccess prop 控制，这里延迟隐藏初始 Canvas，形成转场叠加
   useEffect(() => {
-    setPortalTarget(document.body);
-  }, []);
-
-  // 外部通过 showSuccess prop 控制，这里监听变化触发 Canvas 反转
-  useEffect(() => {
-    if (showSuccess) {
-      setReverseCanvasVisible(true);
-      setTimeout(() => setInitialCanvasVisible(false), 50);
-    }
+    if (!showSuccess) return;
+    const timer = setTimeout(() => setInitialCanvasHidden(true), 50);
+    return () => clearTimeout(timer);
   }, [showSuccess]);
+
+  const initialCanvasVisible = !initialCanvasHidden;
+  const reverseCanvasVisible = showSuccess;
 
   return (
     <div
@@ -160,7 +160,7 @@ export const AuthLayout = ({
 
       {/* 打勾 + 扩散圆形 - 通过 createPortal 传送到 body，脱离层叠上下文 */}
       {showSuccess &&
-        portalTarget &&
+        isClient &&
         createPortal(
           <div
             style={{
@@ -217,7 +217,7 @@ export const AuthLayout = ({
               </motion.div>
             </motion.div>
           </div>,
-          portalTarget
+          document.body
         )}
     </div>
   );

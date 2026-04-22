@@ -52,6 +52,7 @@ import reactor.core.Disposable;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@Deprecated
 public class AiAssistantService {
 
     private final AiModelService aiModelService;

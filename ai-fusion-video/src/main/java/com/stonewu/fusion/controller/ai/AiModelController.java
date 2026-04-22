@@ -38,7 +38,13 @@ public class AiModelController {
                 .icon(reqVO.getIcon()).description(reqVO.getDescription())
                 .sort(reqVO.getSort() != null ? reqVO.getSort() : 0)
                 .config(reqVO.getConfig())
+            .maxConcurrency(reqVO.getMaxConcurrency() != null && reqVO.getMaxConcurrency() > 0
+                ? reqVO.getMaxConcurrency() : 5)
                 .defaultModel(reqVO.getDefaultModel() != null ? reqVO.getDefaultModel() : false)
+            .supportVision(Boolean.TRUE.equals(reqVO.getSupportVision()))
+            .supportReasoning(Boolean.TRUE.equals(reqVO.getSupportReasoning()))
+            .contextWindow(reqVO.getContextWindow() != null && reqVO.getContextWindow() > 0
+                ? reqVO.getContextWindow() : null)
                 .apiConfigId(reqVO.getApiConfigId())
                 .build();
         return success(aiModelService.createAiModel(model));
@@ -51,7 +57,8 @@ public class AiModelController {
         aiModelService.updateAiModel(reqVO.getId(), reqVO.getName(), reqVO.getCode(),
                 reqVO.getModelType(), reqVO.getIcon(), reqVO.getDescription(),
                 reqVO.getSort(), reqVO.getStatus(), reqVO.getConfig(), reqVO.getDefaultModel(),
-                reqVO.getApiConfigId());
+                reqVO.getApiConfigId(), reqVO.getMaxConcurrency(), reqVO.getSupportVision(),
+                reqVO.getSupportReasoning(), reqVO.getContextWindow());
         return success(true);
     }
 
